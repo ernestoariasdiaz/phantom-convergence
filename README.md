@@ -1,6 +1,8 @@
 # Phantom Convergence
 
-**Tools for auditing "N independent sources confirm X → Y" claims in autonomously built knowledge graphs.**
+**Tools for auditing the numbers that autonomously built knowledge graphs report about themselves.**
+
+> **Have a graph of your own?** Export its edges to CSV and run [`graphaudit`](graphaudit): it reports how many nodes are duplicates, how many edges collapse, and which "confirmed by N sources" edges beat chance.
 
 These are the tools behind the preprint [*Phantom Convergence: Auditing Cross-Domain Claims in an
 Autonomously Built Knowledge Graph*](https://doi.org/10.5281/zenodo.23622420) (Arias Díaz, 2026,
@@ -22,12 +24,15 @@ knowledge-graph system. Each audit removed the effect the previous version had r
 | [`convaudit/`](convaudit) | `convaudit` | Tests co-occurrence convergence counts against chance: exact hypergeometric expectation per source, Poisson-binomial test, Benjamini–Hochberg correction, frequency-matched random vocabularies. |
 | [`animus5/`](animus5) | `animus5 extract` | Idea extraction with a local LLM (llama.cpp); an idea is kept only if its verbatim quote is found in the passage. |
 | | `animus5 link` | Multilingual embeddings (bge-m3), a positive control, cross-book links, and the same procedure run on word decoys and form-preserving decoys. |
+| [`graphaudit/`](graphaudit) | `graphaudit` | **Audit any knowledge graph from a CSV export**: duplicate nodes, edge inflation, "N sources confirm X → Y" against chance, and cycles that are impossible by construction. Reads GraphRAG, Neo4j and plain triple exports. |
 
 Both are standard-library-only Rust (no crates) and run on a laptop GPU (results were produced on an RTX 3050, 4 GB).
 
 ```powershell
 cd convaudit; cargo test; cargo build --release
 cd ..\animus5; cargo test; cargo build --release
+cd ..\graphaudit; cargo test; cargo build --release
+.\target\release\graphaudit.exe examples\synthetic_edges.csv
 ```
 
 Usage and options: see each folder's README.

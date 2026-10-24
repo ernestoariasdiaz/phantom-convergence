@@ -1,0 +1,64 @@
+{
+ "typo_map": {
+  "trust state": "trust stte",
+  "system contract": "system cotract",
+  "language feedback": "language eedback",
+  "state agent": "sate agent",
+  "state reward": "sate reward",
+  "feedback tax": "feeback tax",
+  "system wage": "sytem wage",
+  "replica price": "replic price",
+  "debt protocol": "debt protcol",
+  "contract feedback": "cotract feedback",
+  "entropy agent": "etropy agent",
+  "protein entropy": "protein entroy",
+  "risk system": "risk systm",
+  "protocol feedback": "protocol feedbak",
+  "credit river": "credit iver"
+ },
+ "surface_nodes": 453,
+ "true_concepts_used": 262,
+ "typos": 15,
+ "planted": [
+  [
+   "value consensus",
+   "vaccine consensus"
+  ],
+  [
+   "system trust",
+   "reward algorithm"
+  ],
+  [
+   "cooperation proof",
+   "vaccine river"
+  ],
+  [
+   "replica query",
+   "index virus"
+  ],
+  [
+   "power cooperation",
+   "credit contract"
+  ],
+  [
+   "crop market",
+   "trust regulation"
+  ],
+  [
+   "reward consensus",
+   "error trust"
+  ],
+  [
+   "inflation consensus",
+   "labor contract"
+  ],
+  [
+   "language crop",
+   "memory risk"
+  ],
+  [
+   "index contract",
+   "cache index"
+  ]
+ ]
+}

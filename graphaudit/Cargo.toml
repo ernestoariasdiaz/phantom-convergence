@@ -1,0 +1,12 @@
+[package]
+name = "graphaudit"
+version = "0.1.0"
+edition = "2021"
+description = "Audit a knowledge graph's own numbers: duplicate nodes, inflated edges, source support vs chance, structure"
+license = "MIT"
+authors = ["Ernesto Antonio Arias Díaz"]
+
+[dependencies]
+
+[profile.release]
+opt-level = 3

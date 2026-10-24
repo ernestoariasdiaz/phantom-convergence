@@ -1,0 +1,8 @@
+source,target,description,weight,text_unit_ids
+e0,e2,partner,1,"['t1', 't2']"
+e1,e3,partner,1,['t3']
+e0,e4,develops,1,"['t1','t4']"
+e4,e5,succeeds,1,['t4']
+e2,e6,owns,1,['t2';'t5']
+e9,e2,x,1,['t9']
+e4,e0,made_by,1,['t4']

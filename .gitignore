@@ -6,3 +6,4 @@ animus5_*/
 *.gguf
 *.pdf
 embeddings.*
+graphaudit_out/
