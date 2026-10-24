@@ -6,8 +6,9 @@
 
 These are the tools behind the preprint [*Phantom Convergence: Auditing Cross-Domain Claims in an
 Autonomously Built Knowledge Graph*](https://doi.org/10.5281/zenodo.23622420) (Arias Díaz, 2026,
-doi:10.5281/zenodo.23622420). This code, version 1.0.0, is archived at
-[doi:10.5281/zenodo.23622368](https://doi.org/10.5281/zenodo.23622368). They audit ANIMUS, an autonomous
+doi:10.5281/zenodo.23622420). The code is archived on Zenodo: version 1.0.0, exactly as used in the
+paper, at [doi:10.5281/zenodo.23622368](https://doi.org/10.5281/zenodo.23622368); version 1.1.0, which adds
+`graphaudit`, at [doi:10.5281/zenodo.23623444](https://doi.org/10.5281/zenodo.23623444). They audit ANIMUS, an autonomous
 knowledge-graph system. Each audit removed the effect the previous version had reported:
 
 | Claim | What the audit found |
@@ -26,7 +27,7 @@ knowledge-graph system. Each audit removed the effect the previous version had r
 | | `animus5 link` | Multilingual embeddings (bge-m3), a positive control, cross-book links, and the same procedure run on word decoys and form-preserving decoys. |
 | [`graphaudit/`](graphaudit) | `graphaudit` | **Audit any knowledge graph from a CSV export**: duplicate nodes, edge inflation, "N sources confirm X → Y" against chance, and cycles that are impossible by construction. Reads GraphRAG, Neo4j and plain triple exports. |
 
-Both are standard-library-only Rust (no crates) and run on a laptop GPU (results were produced on an RTX 3050, 4 GB).
+All three are standard-library-only Rust (no crates). `graphaudit` needs no GPU; `animus5` runs on a laptop GPU (the paper's results were produced on an RTX 3050, 4 GB).
 
 ```powershell
 cd convaudit; cargo test; cargo build --release
