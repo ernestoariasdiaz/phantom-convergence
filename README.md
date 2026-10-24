@@ -1,12 +1,45 @@
-﻿# Phantom Convergence
+# Phantom Convergence
 
-Tools for auditing convergence claims in autonomously built knowledge graphs.
+**Tools for auditing "N independent sources confirm X → Y" claims in autonomously built knowledge graphs.**
 
-- convaudit/ - tests "N sources confirm X -> Y" counts against chance (hypergeometric + Poisson-binomial, BH correction, random vocabularies)
-- animus5/ - ANIMUS v5: quote-grounded idea extraction with a local LLM, embedding positive control, cross-book links vs. word and form decoys
+These are the tools behind the preprint *Phantom Convergence: Auditing Cross-Domain Claims in an
+Autonomously Built Knowledge Graph* (Arias Díaz, 2026). They audit ANIMUS, an autonomous
+knowledge-graph system. Each audit removed the effect the previous version had reported:
 
-Std-only Rust, no crates. Book texts are not included (copyright); see convaudit/tools to rebuild the corpus from your own copies.
+| Claim | What the audit found |
+|---|---|
+| ~1,892 nodes in the graph | 52% were undetected duplicates: 911 unique ([Phantom Nodes](https://doi.org/10.5281/zenodo.20674981)) |
+| *failure → algorithm* "confirmed by 32 sources" | Co-occurs in 2 of 29 books; chance alone predicts 2.6 (`convaudit`) |
+| Convergence of ideas across 29 books | 10,392 quote-verified ideas link **less** often than decoys: 18,258 vs. 20,050 (`animus5`) |
+| A "limits of knowledge" theme across Kuhn, Meadows, Isaiah, GEB… | Mostly negation syntax: 42% of the top 100 links were both-negated, 11% once decoys keep the grammar |
 
-Related preprint: Phantom Nodes, https://doi.org/10.5281/zenodo.20674981
+## What's here
 
-Author: Ernesto Arias Diaz - MIT License
+| Folder | Tool | What it does |
+|---|---|---|
+| [`convaudit/`](convaudit) | `convaudit` | Tests co-occurrence convergence counts against chance: exact hypergeometric expectation per source, Poisson-binomial test, Benjamini–Hochberg correction, frequency-matched random vocabularies. |
+| [`animus5/`](animus5) | `animus5 extract` | Idea extraction with a local LLM (llama.cpp); an idea is kept only if its verbatim quote is found in the passage. |
+| | `animus5 link` | Multilingual embeddings (bge-m3), a positive control, cross-book links, and the same procedure run on word decoys and form-preserving decoys. |
+
+Both are standard-library-only Rust (no crates) and run on a laptop GPU (results were produced on an RTX 3050, 4 GB).
+
+```powershell
+cd convaudit; cargo test; cargo build --release
+cd ..\animus5; cargo test; cargo build --release
+```
+
+Usage and options: see each folder's README.
+
+## Reusable recipe
+
+1. **Ground extraction mechanically.** A small model asked to verify its own output approved 267 of 269 ideas; a verbatim-quote check cannot be talked into a yes.
+2. **Run a positive control before reading results.** Here, each idea picks its own source quote out of 20 (97%; chance 5%).
+3. **Run the whole procedure on decoys that keep the suspected confound.** Word decoys exposed vocabulary; only form decoys exposed negation.
+
+## Data
+
+Book texts are not included (copyright). `convaudit/tools/seleccionar_libros.ps1` and `pdf2txt.py` rebuild the corpus from your own copies.
+
+## Author
+
+Ernesto Antonio Arias Díaz · MIT License
