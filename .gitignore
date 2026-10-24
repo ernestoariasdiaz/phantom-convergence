@@ -1,0 +1,8 @@
+target/
+txts/
+corpora/
+animus5_out/
+animus5_*/
+*.gguf
+*.pdf
+embeddings.*

@@ -1,0 +1,12 @@
+[package]
+name = "animus5"
+version = "0.1.0"
+edition = "2021"
+description = "ANIMUS v5 — knowledge graph that must prove each connection is not chance"
+license = "MIT"
+authors = ["Ernesto Arias Díaz"]
+
+[dependencies]
+
+[profile.release]
+opt-level = 3

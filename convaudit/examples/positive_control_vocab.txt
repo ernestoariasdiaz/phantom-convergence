@@ -1,0 +1,2 @@
+tension: python, perl, ruby, netbeans
+resolution: interpreter, dll, socket, highlighting
