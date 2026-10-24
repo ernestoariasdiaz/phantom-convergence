@@ -2,8 +2,10 @@
 
 **Tools for auditing "N independent sources confirm X → Y" claims in autonomously built knowledge graphs.**
 
-These are the tools behind the preprint *Phantom Convergence: Auditing Cross-Domain Claims in an
-Autonomously Built Knowledge Graph* (Arias Díaz, 2026). They audit ANIMUS, an autonomous
+These are the tools behind the preprint [*Phantom Convergence: Auditing Cross-Domain Claims in an
+Autonomously Built Knowledge Graph*](https://doi.org/10.5281/zenodo.23622420) (Arias Díaz, 2026,
+doi:10.5281/zenodo.23622420). This code, version 1.0.0, is archived at
+[doi:10.5281/zenodo.23622368](https://doi.org/10.5281/zenodo.23622368). They audit ANIMUS, an autonomous
 knowledge-graph system. Each audit removed the effect the previous version had reported:
 
 | Claim | What the audit found |
@@ -39,6 +41,10 @@ Usage and options: see each folder's README.
 ## Data
 
 Book texts are not included (copyright). `convaudit/tools/seleccionar_libros.ps1` and `pdf2txt.py` rebuild the corpus from your own copies.
+
+## Cite
+
+Arias Díaz, E. A. (2026). *Phantom Convergence: Auditing Cross-Domain Claims in an Autonomously Built Knowledge Graph* (Version 1.0). Zenodo. https://doi.org/10.5281/zenodo.23622420
 
 ## Author
 
