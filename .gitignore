@@ -7,3 +7,5 @@ animus5_*/
 *.pdf
 embeddings.*
 graphaudit_out/
+graphaudit/graphrag_example/
+graphaudit/dulce_audit/

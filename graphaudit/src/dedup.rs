@@ -88,6 +88,47 @@ pub fn allowed_edits(len: usize) -> usize {
     if len < 6 { 0 } else if len <= 15 { 1 } else if len <= 30 { 2 } else { 3 }
 }
 
+/// Possible partial-name duplicates: a one-word node A that is the first or last word
+/// of exactly one other node B (and the same type, when the graph
+/// has types). "CRUZ" -> "TAYLOR CRUZ" is proposed; "BASE" with five longer "... BASE"
+/// names is ambiguous and is not. Returns (A, B) as indices into `reps`' node ids.
+pub fn partial_names(reps: &[usize], norm: &[String], types: &[String], typed: bool) -> Vec<(usize, usize)> {
+    let toks: Vec<Vec<&str>> = reps.iter().map(|&i| norm[i].split(' ').filter(|w| !w.is_empty()).collect()).collect();
+    let mut by_word: HashMap<&str, Vec<usize>> = HashMap::new();
+    for (k, t) in toks.iter().enumerate() {
+        for w in t.iter().collect::<HashSet<_>>() {
+            by_word.entry(w).or_default().push(k);
+        }
+    }
+    let mut out = Vec::new();
+    for (a, ta) in toks.iter().enumerate() {
+        // only single words used alone (a surname, a first name, a bare place name):
+        // longer short names collide with qualifiers like "PANEL (IN DULCE BASE)"
+        if ta.len() != 1 || ta[0].chars().count() < 3 {
+            continue;
+        }
+        let mut hits = Vec::new();
+        for &b in by_word.get(ta[0]).map(|v| v.as_slice()).unwrap_or(&[]) {
+            let tb = &toks[b];
+            if b == a || tb.len() <= ta.len() {
+                continue;
+            }
+            if typed && types[reps[a]] != types[reps[b]] {
+                continue;
+            }
+            if tb[..ta.len()] == ta[..] || tb[tb.len() - ta.len()..] == ta[..] {
+                hits.push(b);
+            }
+        }
+        if hits.len() == 1 {
+            out.push((reps[a], reps[hits[0]]));
+        }
+    }
+    // people first: a surname used alone is the commonest case and the easiest to confirm
+    out.sort_by_key(|&(x, _)| (types[x] != "PERSON", norm[x].clone()));
+    out
+}
+
 pub struct UnionFind {
     p: Vec<usize>,
 }
@@ -224,6 +265,22 @@ mod tests {
         assert_ne!(normalize("GPT-3"), normalize("GPT-4"));
         assert_eq!(normalize("process"), "process");
     }
+    #[test]
+    fn partial_names_unambiguous_same_type() {
+        let labels = ["CRUZ", "TAYLOR CRUZ", "BASE", "DULCE BASE", "MISSION TO DULCE BASE", "ELEVATOR", "ELEVATOR DESCENT"];
+        let types = ["PERSON", "PERSON", "GEO", "GEO", "EVENT", "", "EVENT"].map(String::from).to_vec();
+        let norm: Vec<String> = labels.iter().map(|l| normalize(l)).collect();
+        let reps: Vec<usize> = (0..labels.len()).collect();
+        let p = partial_names(&reps, &norm, &types, true);
+        assert!(p.contains(&(0, 1)));          // CRUZ -> TAYLOR CRUZ
+        assert!(p.contains(&(2, 3)));          // BASE -> DULCE BASE (only GEO superset)
+        assert!(!p.iter().any(|&(a, _)| a == 3)); // two-word names are never the short side
+        assert!(!p.iter().any(|&(a, _)| a == 5)); // untyped ELEVATOR vs EVENT: no
+        let untyped = vec![String::new(); labels.len()];
+        let q = partial_names(&reps, &norm, &untyped, false);
+        assert!(!q.iter().any(|&(a, _)| a == 2)); // BASE is ambiguous without types
+    }
+
     #[test]
     fn word_swap_is_not_a_typo() {
         let l: Vec<String> = ["credit contract", "contract credit", "market failure", "market falure"].iter().map(|s| s.to_string()).collect();

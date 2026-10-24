@@ -24,6 +24,7 @@ const REL: &[&str] = &["relation", "predicate", "rel", "relationship", "type", "
 const DOC: &[&str] = &["doc", "document", "doc_id", "document_id", "source_doc", "provenance", "text_unit_ids", "chunk_id", "chunk", "sources", "evidence", "file", "book", "reference"];
 const NID: &[&str] = &["id", "node_id", "entity_id", "uuid", "key"];
 const NLABEL: &[&str] = &["label", "name", "title", "entity", "text", "value", "node"];
+const NTYPE: &[&str] = &["type", "entity_type", "category", "kind", "class", "node_type"];
 
 struct Args {
     edges: PathBuf,
@@ -34,6 +35,8 @@ struct Args {
     doc: Option<String>,
     nid: Option<String>,
     nlabel: Option<String>,
+    ntype: Option<String>,
+    undirected: bool,
     fuzzy: f64,
     alpha: f64,
     top: usize,
@@ -50,13 +53,16 @@ USAGE: graphaudit <edges.csv> [options]
   --doc COL          provenance column        (auto: doc/document/source_doc/text_unit_ids/chunk_id…)
                      multi-valued cells like 'a;b' or \"['a','b']\" are split
   --id/--label COL   node-table columns      (auto: id/node_id, label/name/title)
+  --type COL         node-table type column   (auto: type/entity_type/category); partial-name
+                     duplicates are only proposed between nodes of the same type
+  --undirected       treat A→B and B→A as the same edge (GraphRAG builds undirected graphs)
   --typos S          edit budget for 'likely duplicates' (default 1 = 1 edit up to 15 chars,
                      2 up to 30, 3 beyond; 0 = off; 2 = twice as loose)
   --alpha A          FDR level for source support (default 0.05)
   --top N            rows to show per table (default 15)
   --out DIR          output folder (default graphaudit_out)
 
-Writes DIR/report.md, duplicates.csv, likely_duplicates.csv, edge_support.csv.";
+Writes DIR/report.md, duplicates.csv, likely_duplicates.csv, partial_names.csv, edge_support.csv.";
 
 fn die(m: &str) -> ! {
     eprintln!("graphaudit: {m}");
@@ -73,6 +79,8 @@ fn parse_args() -> Args {
         doc: None,
         nid: None,
         nlabel: None,
+        ntype: None,
+        undirected: false,
         fuzzy: 1.0,
         alpha: 0.05,
         top: 15,
@@ -90,6 +98,8 @@ fn parse_args() -> Args {
             "--doc" => a.doc = Some(v("--doc")),
             "--id" => a.nid = Some(v("--id")),
             "--label" => a.nlabel = Some(v("--label")),
+            "--type" => a.ntype = Some(v("--type")),
+            "--undirected" => a.undirected = true,
             "--typos" => a.fuzzy = v("--typos").parse().unwrap_or_else(|_| die("bad --typos")),
             "--alpha" => a.alpha = v("--alpha").parse().unwrap_or_else(|_| die("bad --alpha")),
             "--top" => a.top = v("--top").parse().unwrap_or_else(|_| die("bad --top")),
@@ -212,11 +222,13 @@ fn main() {
     let mut ids: Vec<String> = Vec::new();
     let mut labels: Vec<String> = Vec::new();
     let mut idx: HashMap<String, usize> = HashMap::new();
+    let mut types: Vec<String> = Vec::new();
     let mut declared = 0usize;
     if let Some(np) = &a.nodes {
         let nt = read_table(np);
         let i_id = nt.col(a.nid.as_deref(), NID).unwrap_or_else(|| die(&format!("no id column in node file {:?}; use --id", nt.header)));
         let i_lab = nt.col(a.nlabel.as_deref(), NLABEL).filter(|&i| i != i_id).unwrap_or(i_id);
+        let i_typ = nt.col(a.ntype.as_deref(), NTYPE).filter(|&i| i != i_id && i != i_lab);
         for r in &nt.rows {
             let id = r.get(i_id).map(|s| s.trim().to_string()).unwrap_or_default();
             if id.is_empty() || idx.contains_key(&id) {
@@ -224,12 +236,13 @@ fn main() {
             }
             idx.insert(id.clone(), ids.len());
             labels.push(r.get(i_lab).cloned().unwrap_or_else(|| id.clone()));
+            types.push(i_typ.and_then(|i| r.get(i)).map(|t| t.trim().to_uppercase()).unwrap_or_default());
             ids.push(id);
         }
         declared = ids.len();
     }
     let mut dangling: HashSet<String> = HashSet::new();
-    let mut node_of = |s: &str, ids: &mut Vec<String>, labels: &mut Vec<String>, idx: &mut HashMap<String, usize>| -> usize {
+    let mut node_of = |s: &str, ids: &mut Vec<String>, labels: &mut Vec<String>, types: &mut Vec<String>, idx: &mut HashMap<String, usize>| -> usize {
         let s = s.trim();
         if let Some(&i) = idx.get(s) {
             return i;
@@ -240,6 +253,7 @@ fn main() {
         idx.insert(s.to_string(), ids.len());
         ids.push(s.to_string());
         labels.push(s.to_string());
+        types.push(String::new());
         ids.len() - 1
     };
 
@@ -257,8 +271,8 @@ fn main() {
             skipped += 1;
             continue;
         }
-        let u = node_of(s, &mut ids, &mut labels, &mut idx);
-        let v = node_of(t, &mut ids, &mut labels, &mut idx);
+        let u = node_of(s, &mut ids, &mut labels, &mut types, &mut idx);
+        let v = node_of(t, &mut ids, &mut labels, &mut types, &mut idx);
         let rel = ci_rel.and_then(|i| r.get(i)).map(|x| x.trim().to_lowercase()).unwrap_or_default();
         let docs = ci_doc.and_then(|i| r.get(i)).map(|x| csv::split_multi(x)).unwrap_or_default();
         edges.push(E { u, v, rel, docs });
@@ -279,8 +293,21 @@ fn main() {
         (0..d.n_groups).map(|i| uf.find(i)).collect::<HashSet<_>>().len()
     };
 
+    // partial names: "CRUZ" is the tail of exactly one other same-type name, "TAYLOR CRUZ"
+    let typed = types.iter().any(|t| !t.is_empty());
+    let reps_of: Vec<usize> = {
+        let mut seen = HashSet::new();
+        (0..n_nodes).filter(|&i| seen.insert(g(i))).collect()
+    };
+    let partial = dedup::partial_names(&reps_of, &d.norm, &types, typed);
+    let linked: HashSet<(usize, usize)> = edges.iter().map(|e| (g(e.u).min(g(e.v)), g(e.u).max(g(e.v)))).collect();
+
     // ---- 2. edge inflation
-    let raw_keys: HashSet<(usize, usize, &str)> = edges.iter().map(|e| (e.u, e.v, e.rel.as_str())).collect();
+    let raw_keys: HashSet<(usize, usize, &str)> =
+        edges.iter().map(|e| if a.undirected { (e.u.min(e.v), e.u.max(e.v), e.rel.as_str()) } else { (e.u, e.v, e.rel.as_str()) }).collect();
+    // the same pair stored in both directions (regardless of relation label)
+    let directed_pairs: HashSet<(usize, usize)> = edges.iter().map(|e| (g(e.u), g(e.v))).filter(|(u, v)| u != v).collect();
+    let reciprocal = directed_pairs.iter().filter(|(u, v)| u < v && directed_pairs.contains(&(*v, *u))).count();
     let mut merged: HashMap<(usize, usize, String), HashSet<String>> = HashMap::new();
     let mut merged_rows: HashMap<(usize, usize, String), usize> = HashMap::new();
     let mut self_loops_raw = 0usize;
@@ -291,7 +318,8 @@ fn main() {
         } else if g(e.u) == g(e.v) {
             self_loops_merge += 1;
         }
-        let k = (g(e.u), g(e.v), e.rel.clone());
+        let (gu, gv) = (g(e.u), g(e.v));
+        let k = if a.undirected { (gu.min(gv), gu.max(gv), e.rel.clone()) } else { (gu, gv, e.rel.clone()) };
         merged.entry(k.clone()).or_default().extend(e.docs.iter().cloned());
         *merged_rows.entry(k).or_default() += 1;
     }
@@ -372,7 +400,7 @@ fn main() {
         }
         indeg.entry(*u).or_default();
     }
-    let in_cycles = nodes_on_cycles(&out_n);
+    let in_cycles = if a.undirected { 0 } else { nodes_on_cycles(&out_n) };
     let both = srcs.intersection(&dsts).count();
     let isolated = if a.nodes.is_some() { (0..declared).filter(|&i| !deg.contains_key(&g(i))).count() } else { 0 };
     let mut degs: Vec<usize> = deg.values().cloned().collect();
@@ -394,6 +422,12 @@ fn main() {
         s += &format!("{},{},{:.3}\n", csv_cell(&labels[x]), csv_cell(&labels[y]), j);
     }
     fs::write(a.out.join("likely_duplicates.csv"), s).unwrap();
+    let mut s = String::from("short_label,full_label,type,linked_by_an_edge\n");
+    for &(x, y) in &partial {
+        s += &format!("{},{},{},{}\n", csv_cell(&labels[x]), csv_cell(&labels[y]), csv_cell(&types[x]), linked.contains(&(g(x).min(g(y)), g(x).max(g(y)))));
+    }
+    fs::write(a.out.join("partial_names.csv"), s).unwrap();
+    let few_docs = has_docs && n_docs < 20;
     let rep = |grp: usize| -> &str {
         let i = (0..n_nodes).find(|&i| g(i) == grp).unwrap();
         &labels[i]
@@ -407,6 +441,7 @@ fn main() {
     fs::write(a.out.join("edge_support.csv"), s).unwrap();
 
     // ---- report
+    let arrow = if a.undirected { "—" } else { "→" };
     let mut r = String::new();
     let p = |r: &mut String, t: String| {
         r.push_str(&t);
@@ -426,11 +461,30 @@ fn main() {
     p(&mut r, "| Measure | As stored | After audit |\n|---|---|---|".into());
     p(&mut r, format!("| Nodes | {} | {} certain unique ({} duplicates, {}) · {} if likely duplicates also merge |", n_nodes, d.n_groups, n_nodes - d.n_groups, pct(n_nodes - d.n_groups, n_nodes), likely_groups));
     p(&mut r, format!("| Edges | {} rows · {} distinct | {} after merging duplicate nodes ({} fewer, {}) |", edges.len(), raw_keys.len(), merged.len(), raw_keys.len() - merged.len(), pct(raw_keys.len() - merged.len(), raw_keys.len())));
-    if has_docs {
-        p(&mut r, format!("| Edges claimed by ≥ 2 documents | {} | {} beat chance (FDR q < {}) · {} within what chance predicts |", sup.len(), sig.len(), a.alpha, artifacts));
+    if !partial.is_empty() {
+        let ex = partial.iter().take(2).map(|&(x, y)| format!("{} ↔ {}", md(&labels[x]), md(&labels[y]))).collect::<Vec<_>>().join("; ");
+        p(&mut r, format!("| Possible partial-name duplicates | – | {} to review ({}) |", partial.len(), ex));
     }
-    p(&mut r, format!("| Directed cycles | – | {} nodes in cycles{} |\n", in_cycles,
-        if in_cycles == 0 && both == 0 { " · **acyclic by construction**" } else { "" }));
+    if !a.undirected {
+        p(&mut r, format!("| Same pair stored in both directions | {} pairs | {} |", reciprocal,
+            if reciprocal > 0 { "if the graph is undirected (GraphRAG's is), these are duplicate edges: rerun with `--undirected`" } else { "none" }));
+    }
+    if has_docs {
+        if few_docs {
+            p(&mut r, format!("| Edges claimed by ≥ 2 documents | {} | not testable: only {} documents |", sup.len(), n_docs));
+        } else {
+            p(&mut r, format!("| Edges claimed by ≥ 2 documents | {} | {} beat chance (FDR q < {}) · {} within what chance predicts |", sup.len(), sig.len(), a.alpha, artifacts));
+        }
+    }
+    if a.nodes.is_some() && !dangling.is_empty() {
+        p(&mut r, format!("| Edge endpoints missing from the node table | {} | edges pointing to nodes that do not exist |", dangling.len()));
+    }
+    if a.undirected {
+        p(&mut r, "| Cycles | – | not assessed (graph treated as undirected) |\n".into());
+    } else {
+        p(&mut r, format!("| Directed cycles | – | {} nodes in cycles{} |\n", in_cycles,
+            if in_cycles == 0 && both == 0 { " · **acyclic by construction**" } else if reciprocal > 0 && in_cycles > 0 { " (two-way duplicate pairs count as cycles)" } else { "" }));
+    }
 
     p(&mut r, "## 1. Duplicate nodes\n".into());
     p(&mut r, format!("**{} of {} nodes ({}) are certain duplicates**: identical after lower-casing, removing accents, punctuation, leading articles and simple plurals. {} further {} the same name up to a typo (1 character edit for names up to 15 characters, 2 up to 30); the same words in another order, or different numbers, are never paired.\n",
@@ -453,18 +507,30 @@ fn main() {
         }
         p(&mut r, String::new());
     }
+    if !partial.is_empty() {
+        p(&mut r, format!("**{} possible partial-name duplicates**: a one-word name that is the first or last word of exactly one other {}name, such as a surname used alone. Some will be genuinely different things (a town and the base named after it); review them by hand.\n", partial.len(), if typed { "same-type " } else { "" }));
+        p(&mut r, "| Short name | Full name | Type | Linked to each other by an edge |\n|---|---|---|---|".into());
+        for &(x, y) in partial.iter().take(a.top) {
+            let l = linked.contains(&(g(x).min(g(y)), g(x).max(g(y))));
+            p(&mut r, format!("| {} | {} | {} | {} |", md(&labels[x]), md(&labels[y]), if types[x].is_empty() { "–".into() } else { md(&types[x]) }, if l { "yes" } else { "no" }));
+        }
+        p(&mut r, String::new());
+    }
     p(&mut r, "Same meaning in different words (\"car\" / \"automobile\") is not detected here: that needs an embedding model.\n".into());
 
     p(&mut r, "## 2. Edge inflation\n".into());
     p(&mut r, format!("{} edge rows hold {} distinct edges; merging duplicate nodes leaves **{}**. {} edges became self-loops (a node linked to a copy of itself){}.\n",
         edges.len(), raw_keys.len(), merged.len(), self_loops_merge,
         if self_loops_raw > 0 { format!("; {self_loops_raw} were self-loops already") } else { String::new() }));
+    if !a.undirected && reciprocal > 0 {
+        p(&mut r, format!("{} node pairs are linked in both directions (A → B and B → A). In a directed graph that can be meaningful; in an undirected one (GraphRAG builds undirected graphs) each pair is one relationship stored twice. Rerun with `--undirected` to count them once.\n", reciprocal));
+    }
     let mut multi: Vec<(&(usize, usize, String), &usize)> = merged_rows.iter().filter(|(_, &c)| c > 1).collect();
     multi.sort_by(|x, y| y.1.cmp(x.1));
     if !multi.is_empty() {
         p(&mut r, "Edges stored most often:\n\n| Edge | Rows |\n|---|---|".into());
         for ((u, v, rel), c) in multi.iter().take(a.top.min(10)) {
-            p(&mut r, format!("| {} → {}{} | {} |", md(&name(*u)), md(&name(*v)), if rel.is_empty() { String::new() } else { format!(" ({})", md(rel)) }, c));
+            p(&mut r, format!("| {} {} {}{} | {} |", md(&name(*u)), arrow, md(&name(*v)), if rel.is_empty() { String::new() } else { format!(" ({})", md(rel)) }, c));
         }
         p(&mut r, String::new());
     }
@@ -474,20 +540,29 @@ fn main() {
         p(&mut r, "Skipped: no provenance column (which document each edge came from). Add one with `--doc` to test \"N sources confirm X → Y\" claims.\n".into());
     } else {
         p(&mut r, format!("{} documents. For each edge stored from ≥ 2 documents: given that it is found once (which puts both entities in that document by construction), and that its entities appear in *a* and *b* of the *D* documents, independent placement predicts *1 + (a−1)(b−1)/(D−1)* documents (exact hypergeometric test; Benjamini–Hochberg across all {} edges with provenance, so picking the multi-source ones does not inflate significance). An edge whose support is close to that number is what two frequent entities produce anyway.\n", n_docs, n_tested));
-        p(&mut r, format!("**{} of {} multi-source edges beat chance; {} are within what chance predicts.**\n", sig.len(), sup.len(), artifacts));
+        if few_docs {
+            p(&mut r, format!("**Not testable here: with only {} documents, most entities appear in most documents, so no edge can beat chance.** The table is shown for transparency only. Source counts in graphs built from so few documents carry no evidence either way.\n", n_docs));
+        } else {
+            p(&mut r, format!("**{} of {} multi-source edges beat chance; {} are within what chance predicts.**\n", sig.len(), sup.len(), artifacts));
+        }
         if !sup.is_empty() {
             p(&mut r, "| Edge | Documents | Expected by chance | q | Verdict |\n|---|---|---|---|---|".into());
             for x in sup.iter().take(a.top) {
-                let verdict = if x.q < a.alpha && x.support as f64 > x.expected { "beyond chance" } else if x.support as f64 <= x.expected * 1.5 + 0.5 { "frequency artifact" } else { "not significant" };
-                p(&mut r, format!("| {} → {}{} | {} | {:.1} | {} | {} |", md(&name(x.u)), md(&name(x.v)), if x.rel.is_empty() { String::new() } else { format!(" ({})", md(&x.rel)) }, x.support, x.expected, fmt_p(x.q), verdict));
+                let verdict = if few_docs { "not testable" } else if x.q < a.alpha && x.support as f64 > x.expected { "beyond chance" } else if x.support as f64 <= x.expected * 1.5 + 0.5 { "frequency artifact" } else { "not significant" };
+                p(&mut r, format!("| {} {} {}{} | {} | {:.1} | {} | {} |", md(&name(x.u)), arrow, md(&name(x.v)), if x.rel.is_empty() { String::new() } else { format!(" ({})", md(&x.rel)) }, x.support, x.expected, fmt_p(x.q), verdict));
             }
             p(&mut r, String::new());
         }
     }
 
     p(&mut r, "## 4. Structure\n".into());
-    p(&mut r, format!("- Directed cycles: {} nodes sit on a cycle.", in_cycles));
-    if in_cycles == 0 {
+    if a.undirected {
+        p(&mut r, "- Cycles: not assessed, because the graph is treated as undirected.".into());
+    } else {
+        p(&mut r, format!("- Directed cycles: {} nodes sit on a cycle{}.", in_cycles,
+            if reciprocal > 0 && in_cycles > 0 { format!("; {} two-way pairs (A → B and B → A) are cycles of length 2", reciprocal) } else { String::new() }));
+    }
+    if !a.undirected && in_cycles == 0 {
         if both == 0 {
             p(&mut r, "- **No node is ever both a source and a target, so this graph cannot contain a cycle whatever the data say.** \"No feedback loops found\" is a property of how edges were built, not a finding.".into());
         } else {
@@ -496,9 +571,12 @@ fn main() {
     }
     p(&mut r, format!("- Degree concentration: the top 1% of nodes ({}) hold {:.0}% of all edge endpoints.", top_k, 100.0 * top_share));
     if a.nodes.is_some() {
-        p(&mut r, format!("- Nodes declared but never used in an edge: {} · edge endpoints missing from the node table: {}.", isolated, dangling.len()));
+        let mut dl: Vec<&String> = dangling.iter().collect();
+        dl.sort();
+        p(&mut r, format!("- Nodes declared but never used in an edge: {} · edge endpoints missing from the node table: {}{}.", isolated, dangling.len(),
+            if dl.is_empty() { String::new() } else { format!(" ({})", dl.iter().take(10).map(|x| format!("`{}`", md(x))).collect::<Vec<_>>().join(", ")) }));
     }
-    p(&mut r, "\nFiles: `duplicates.csv`, `likely_duplicates.csv`, `edge_support.csv`.".into());
+    p(&mut r, "\nFiles: `duplicates.csv`, `likely_duplicates.csv`, `partial_names.csv`, `edge_support.csv`.".into());
 
     fs::write(a.out.join("report.md"), &r).unwrap();
     let mut by_kind: BTreeMap<&str, String> = BTreeMap::new();
