@@ -407,6 +407,22 @@ fn main() {
     degs.sort_unstable_by(|x, y| y.cmp(x));
     let top_k = (degs.len() as f64 * 0.01).ceil().max(1.0) as usize;
     let top_share = degs.iter().take(top_k).sum::<usize>() as f64 / degs.iter().sum::<usize>().max(1) as f64;
+    // connected pieces (ignoring direction) among nodes that have at least one edge
+    let mut ids: HashMap<usize, usize> = HashMap::new();
+    for k in deg.keys() {
+        let n = ids.len();
+        ids.insert(*k, n);
+    }
+    let mut cuf = dedup::UnionFind::new(ids.len());
+    for (u, v, _) in merged.keys() {
+        cuf.union(ids[u], ids[v]);
+    }
+    let mut comp: HashMap<usize, usize> = HashMap::new();
+    for i in 0..ids.len() {
+        *comp.entry(cuf.find(i)).or_default() += 1;
+    }
+    let mut comp_sizes: Vec<usize> = comp.values().cloned().collect();
+    comp_sizes.sort_unstable_by(|x, y| y.cmp(x));
 
     // ---- write CSVs
     fs::create_dir_all(&a.out).unwrap_or_else(|e| die(&e.to_string()));
@@ -487,7 +503,7 @@ fn main() {
     }
 
     p(&mut r, "## 1. Duplicate nodes\n".into());
-    p(&mut r, format!("**{} of {} nodes ({}) are certain duplicates**: identical after lower-casing, removing accents, punctuation and leading articles{}. {} further {} for review: singular/plural forms of the same name, or one typo apart (1 character edit up to 15 characters, 2 up to 30). Reordered words, different numbers, different honorifics (Mr / Mrs){} are never paired.\n",
+    p(&mut r, format!("**{} of {} nodes ({}) are certain duplicates**: identical after lower-casing, removing accents, punctuation and leading articles{}. {} further {} for review: singular/plural forms of the same name, a leading title (King, Saint), the same name with an UNKNOWN type, or one typo apart (1 character edit up to 15 characters, 2 up to 30). Reordered words, different numbers, different honorifics (Mr / Mrs), opposites (movable / immovable){} are never paired.\n",
         n_nodes - d.n_groups, n_nodes, pct(n_nodes - d.n_groups, n_nodes), if typed { ", and of the same type" } else { "" }, d.likely.len(), if d.likely.len() == 1 { "pair is" } else { "pairs are" }, if typed { " and different types" } else { "" }));
     if !d.certain.is_empty() {
         let mut groups = d.certain.clone();
@@ -541,7 +557,7 @@ fn main() {
     } else {
         p(&mut r, format!("{} documents. For each edge stored from ≥ 2 documents: given that it is found once (which puts both entities in that document by construction), and that its entities appear in *a* and *b* of the *D* documents, independent placement predicts *1 + (a−1)(b−1)/(D−1)* documents (exact hypergeometric test; Benjamini–Hochberg across all {} edges with provenance, so picking the multi-source ones does not inflate significance). An edge whose support is close to that number is what two frequent entities produce anyway.\n", n_docs, n_tested));
         if few_docs {
-            p(&mut r, format!("**Not testable here: with only {} documents, most entities appear in most documents, so no edge can beat chance.** The table is shown for transparency only. Source counts in graphs built from so few documents carry no evidence either way.\n", n_docs));
+            p(&mut r, format!("**Not testable here: with only {} documents, even an edge found in every document could not be told apart from chance after correcting for the number of edges tested.** The table is shown for transparency only. Source counts in graphs built from so few documents carry no evidence either way.\n", n_docs));
         } else {
             p(&mut r, format!("**{} of {} multi-source edges beat chance; {} are within what chance predicts.**\n", sig.len(), sup.len(), artifacts));
         }
@@ -567,6 +583,17 @@ fn main() {
             p(&mut r, "- **No node is ever both a source and a target, so this graph cannot contain a cycle whatever the data say.** \"No feedback loops found\" is a property of how edges were built, not a finding.".into());
         } else {
             p(&mut r, format!("- The graph is acyclic although {} nodes are both sources and targets: that absence of loops is a real property of the data.", both));
+        }
+    }
+    if let Some(&big) = comp_sizes.first() {
+        let linked: usize = comp_sizes.iter().sum();
+        if comp_sizes.len() == 1 {
+            p(&mut r, "- Connected pieces: 1. Every linked node can be reached from every other.".into());
+        } else {
+            p(&mut r, format!("- Connected pieces: **{}**. The largest holds {} of {} linked nodes ({}); a traversal from it never reaches the other {} (piece sizes: {}).",
+                comp_sizes.len(), big, linked, pct(big, linked), linked - big,
+                comp_sizes.iter().skip(1).take(12).map(|x| x.to_string()).collect::<Vec<_>>().join(", ")
+                    + if comp_sizes.len() > 13 { ", …" } else { "" }));
         }
     }
     p(&mut r, format!("- Degree concentration: the top 1% of nodes ({}) hold {:.0}% of all edge endpoints.", top_k, 100.0 * top_share));

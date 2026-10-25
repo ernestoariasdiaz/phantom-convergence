@@ -66,13 +66,44 @@ fn honorific_differs(a: &str, b: &str) -> bool {
     ta.symmetric_difference(&tb).any(|w| HONORIFICS.contains(w))
 }
 
+/// Leading titles that name the same person with or without them ("KING EDWARD IV" / "EDWARD IV").
+const TITLES: &[&str] = &["king", "queen", "prince", "princess", "emperor", "empress", "pope", "saint", "st",
+    "president", "general", "captain", "rey", "reina", "san", "santa"];
+
+/// Types that say nothing ("UNKNOWN") are compatible with any type. An empty type (a node missing
+/// from the node table) is not: nothing is known about it at all.
+pub fn type_compatible(a: &str, b: &str) -> bool {
+    let vague = |t: &str| matches!(t.trim().to_lowercase().as_str(), "unknown" | "other" | "none" | "null");
+    a == b || vague(a) || vague(b)
+}
+
+/// "MOVABLE PROPERTY" / "IMMOVABLE PROPERTY": one edit apart, opposite meanings.
+fn negation_pair(a: &str, b: &str) -> bool {
+    const NEG: &[&str] = &["im", "in", "il", "ir", "un", "non", "dis", "anti", "a"];
+    let ta: Vec<&str> = a.split(' ').collect();
+    let tb: Vec<&str> = b.split(' ').collect();
+    ta.len() == tb.len()
+        && ta.iter().zip(&tb).any(|(x, y)| {
+            x != y && NEG.iter().any(|p| y.strip_prefix(p) == Some(*x) || x.strip_prefix(p) == Some(*y))
+        })
+}
+
 fn possessive(raw: &str) -> bool {
     let l = raw.to_lowercase();
     l.contains("'s ") || l.contains("’s ") || l.ends_with("'s") || l.ends_with("’s") || l.contains("s' ")
 }
 
+/// A regnal or ordinal Roman numeral from 1 to 39 ("ii", "vii", "xiv"), not a word like "civil" or "mix".
+fn roman(w: &str) -> bool {
+    const ONES: [&str; 10] = ["", "i", "ii", "iii", "iv", "v", "vi", "vii", "viii", "ix"];
+    (0..4).any(|t| ONES.iter().any(|o| !(t == 0 && o.is_empty()) && w == format!("{}{}", "x".repeat(t), o)))
+}
+
+/// Numbers in a name, Arabic and Roman: "GPT-3" / "GPT-4" and "HENRY VI" / "HENRY VII" never pair.
 fn digits(s: &str) -> String {
-    s.split(|c: char| !c.is_ascii_digit()).filter(|x| !x.is_empty()).collect::<Vec<_>>().join(",")
+    let mut out: Vec<String> = s.split(|c: char| !c.is_ascii_digit()).filter(|x| !x.is_empty()).map(String::from).collect();
+    out.extend(s.split(' ').filter(|w| roman(w)).map(|w| format!("r{w}")));
+    out.join(",")
 }
 
 fn trigrams(s: &str) -> HashSet<[char; 3]> {
@@ -135,7 +166,7 @@ pub fn partial_names(reps: &[usize], norm: &[String], raw: &[String], types: &[S
             if b == a || tb.len() <= ta.len() {
                 continue;
             }
-            if typed && types[reps[a]] != types[reps[b]] {
+            if typed && !type_compatible(&types[reps[a]], &types[reps[b]]) {
                 continue;
             }
             // "CAROLINE'S HUSBAND" is someone else, related to Caroline
@@ -234,14 +265,35 @@ pub fn dedup(labels: &[String], types: &[String], strictness: f64) -> DedupResul
     let reps: Vec<usize> = members.iter().map(|m| m[0]).collect();
     // singular / plural forms of the same name and type: often the same thing, sometimes
     // not ("THE BOY" and "THE BOYS" are different characters), so they are only proposed
-    let mut by_plural: HashMap<(String, String), Vec<usize>> = HashMap::new();
+    // (also: the same name where one copy has a vague type such as UNKNOWN)
+    let mut by_plural: HashMap<String, Vec<usize>> = HashMap::new();
     for &r in &reps {
-        by_plural.entry((plural_key(&norm[r]), ty(r).to_string())).or_default().push(r);
+        by_plural.entry(plural_key(&norm[r])).or_default().push(r);
     }
     for v in by_plural.values() {
         for i in 0..v.len() {
             for j in (i + 1)..v.len() {
-                likely.push((v[i], v[j], 1.0, "singular/plural"));
+                if !type_compatible(ty(v[i]), ty(v[j])) {
+                    continue;
+                }
+                let why = if norm[v[i]] == norm[v[j]] { "same name, type unknown" } else { "singular/plural" };
+                likely.push((v[i], v[j], 1.0, why));
+            }
+        }
+    }
+    // a leading title: "KING EDWARD IV" / "EDWARD IV"
+    let by_norm: HashMap<&str, Vec<usize>> = reps.iter().fold(HashMap::new(), |mut m, &r| {
+        m.entry(norm[r].as_str()).or_insert_with(Vec::new).push(r);
+        m
+    });
+    for &r in &reps {
+        let toks: Vec<&str> = norm[r].split(' ').collect();
+        if toks.len() >= 2 && TITLES.contains(&toks[0]) {
+            let rest = toks[1..].join(" ");
+            for &o in by_norm.get(rest.as_str()).map(|v| v.as_slice()).unwrap_or(&[]) {
+                if o != r && type_compatible(ty(r), ty(o)) {
+                    likely.push((o, r, 1.0, "title"));
+                }
             }
         }
     }
@@ -275,7 +327,7 @@ pub fn dedup(labels: &[String], types: &[String], strictness: f64) -> DedupResul
                     continue;
                 }
                 let b = &norm[reps[h]];
-                if digits(a) != digits(b) || ty(reps[g]) != ty(reps[h]) || honorific_differs(a, b) {
+                if digits(a) != digits(b) || !type_compatible(ty(reps[g]), ty(reps[h])) || honorific_differs(a, b) || negation_pair(a, b) {
                     continue;
                 }
                 if plural_key(a) == plural_key(b) {
@@ -344,6 +396,23 @@ mod tests {
         assert!(!r.likely.iter().any(|&(a, b, _, _)| l[a].contains("FEZZIWIG") && l[b].contains("FEZZIWIG")));
         assert!(!r.likely.iter().any(|&(a, b, _, _)| l[a].contains("PHANTOM") && l[b].contains("PHANTOM"))); // types differ
         assert!(r.likely.iter().any(|&(a, b, _, why)| l[a] == "THE BOY" && l[b] == "THE BOYS" && why == "singular/plural"));
+    }
+
+    #[test]
+    fn negation_titles_and_unknown_types() {
+        let l: Vec<String> = ["Movable Property", "Immovable Property", "Edward IV", "King Edward IV", "Henry", "Henry VI", "Henry VII", "Margaret", "Margaret of Anjou"]
+            .iter().map(|s| s.to_string()).collect();
+        let t: Vec<String> = ["concept", "concept", "person", "UNKNOWN", "UNKNOWN", "person", "UNKNOWN", "person", "person"]
+            .iter().map(|s| s.to_string()).collect();
+        let r = dedup(&l, &t, 1.0);
+        assert!(!r.likely.iter().any(|&(a, b, _, _)| (a.min(b), a.max(b)) == (0, 1)));
+        assert!(r.likely.iter().any(|&(a, b, _, w)| (a.min(b), a.max(b)) == (2, 3) && w == "title"));
+        let reps: Vec<usize> = (0..l.len()).collect();
+        let p = partial_names(&reps, &r.norm, &l, &t, true);
+        assert!(!r.likely.iter().any(|&(a, b, _, _)| (a.min(b), a.max(b)) == (5, 6))); // Henry VI / VII
+        assert!(roman("vii") && roman("xiv") && !roman("civil") && !roman("mix") && roman("x"));
+        assert!(p.contains(&(7, 8)));
+        assert!(!p.iter().any(|&(a, _)| a == 4)); // Henry: VI, VII -> ambiguous
     }
 
     #[test]
