@@ -84,6 +84,13 @@ Three texts on unrelated subjects explain three pieces, not 47. graphaudit finds
 This graph also showed why opposites (`MOVABLE PROPERTY` / `IMMOVABLE PROPERTY`, one edit apart) and Roman numerals
 must never pair, and why `UNKNOWN` must not block a match with a typed node.
 
+## Control: a hand-built Neo4j graph
+
+Neo4j's *Movies* example ([neo4j-graph-examples/movies](https://github.com/neo4j-graph-examples/movies),
+`scripts/movies.cypher`) is curated by hand: 171 nodes, 253 relationships. graphaudit reports 0 duplicates,
+0 likely pairs, 0 partial names, 0 unused or dangling nodes, and one connected piece. The findings above come
+from LLM extraction, not from the checks themselves.
+
 ## Run
 
 ```powershell
