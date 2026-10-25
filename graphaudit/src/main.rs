@@ -235,8 +235,8 @@ fn main() {
                 continue;
             }
             idx.insert(id.clone(), ids.len());
-            labels.push(r.get(i_lab).cloned().unwrap_or_else(|| id.clone()));
-            types.push(i_typ.and_then(|i| r.get(i)).map(|t| t.trim().to_uppercase()).unwrap_or_default());
+            labels.push(r.get(i_lab).map(|l| l.trim().trim_matches('"').to_string()).unwrap_or_else(|| id.clone()));
+            types.push(i_typ.and_then(|i| r.get(i)).map(|t| t.trim().trim_matches('"').to_uppercase()).unwrap_or_default());
             ids.push(id);
         }
         declared = ids.len();
@@ -252,7 +252,7 @@ fn main() {
         }
         idx.insert(s.to_string(), ids.len());
         ids.push(s.to_string());
-        labels.push(s.to_string());
+        labels.push(s.trim_matches('"').to_string());
         types.push(String::new());
         ids.len() - 1
     };
@@ -283,23 +283,23 @@ fn main() {
     let n_nodes = ids.len();
 
     // ---- 1. duplicate nodes
-    let d = dedup::dedup(&labels, a.fuzzy);
+    let typed = types.iter().any(|t| !t.is_empty());
+    let d = dedup::dedup(&labels, &types, a.fuzzy);
     let g = |i: usize| d.group[i];
     let likely_groups = {
         let mut uf = dedup::UnionFind::new(d.n_groups);
-        for &(x, y, _) in &d.likely {
+        for &(x, y, _, _) in &d.likely {
             uf.union(g(x), g(y));
         }
         (0..d.n_groups).map(|i| uf.find(i)).collect::<HashSet<_>>().len()
     };
 
     // partial names: "CRUZ" is the tail of exactly one other same-type name, "TAYLOR CRUZ"
-    let typed = types.iter().any(|t| !t.is_empty());
     let reps_of: Vec<usize> = {
         let mut seen = HashSet::new();
         (0..n_nodes).filter(|&i| seen.insert(g(i))).collect()
     };
-    let partial = dedup::partial_names(&reps_of, &d.norm, &types, typed);
+    let partial = dedup::partial_names(&reps_of, &d.norm, &labels, &types, typed);
     let linked: HashSet<(usize, usize)> = edges.iter().map(|e| (g(e.u).min(g(e.v)), g(e.u).max(g(e.v)))).collect();
 
     // ---- 2. edge inflation
@@ -417,9 +417,9 @@ fn main() {
         }
     }
     fs::write(a.out.join("duplicates.csv"), s).unwrap();
-    let mut s = String::from("label_a,label_b,similarity\n");
-    for &(x, y, j) in &d.likely {
-        s += &format!("{},{},{:.3}\n", csv_cell(&labels[x]), csv_cell(&labels[y]), j);
+    let mut s = String::from("label_a,label_b,similarity,reason\n");
+    for &(x, y, j, why) in &d.likely {
+        s += &format!("{},{},{:.3},{}\n", csv_cell(&labels[x]), csv_cell(&labels[y]), j, why);
     }
     fs::write(a.out.join("likely_duplicates.csv"), s).unwrap();
     let mut s = String::from("short_label,full_label,type,linked_by_an_edge\n");
@@ -487,8 +487,8 @@ fn main() {
     }
 
     p(&mut r, "## 1. Duplicate nodes\n".into());
-    p(&mut r, format!("**{} of {} nodes ({}) are certain duplicates**: identical after lower-casing, removing accents, punctuation, leading articles and simple plurals. {} further {} the same name up to a typo (1 character edit for names up to 15 characters, 2 up to 30); the same words in another order, or different numbers, are never paired.\n",
-        n_nodes - d.n_groups, n_nodes, pct(n_nodes - d.n_groups, n_nodes), d.likely.len(), if d.likely.len() == 1 { "pair is" } else { "pairs are" }));
+    p(&mut r, format!("**{} of {} nodes ({}) are certain duplicates**: identical after lower-casing, removing accents, punctuation and leading articles{}. {} further {} for review: singular/plural forms of the same name, or one typo apart (1 character edit up to 15 characters, 2 up to 30). Reordered words, different numbers, different honorifics (Mr / Mrs){} are never paired.\n",
+        n_nodes - d.n_groups, n_nodes, pct(n_nodes - d.n_groups, n_nodes), if typed { ", and of the same type" } else { "" }, d.likely.len(), if d.likely.len() == 1 { "pair is" } else { "pairs are" }, if typed { " and different types" } else { "" }));
     if !d.certain.is_empty() {
         let mut groups = d.certain.clone();
         groups.sort_by_key(|grp| std::cmp::Reverse(grp.len()));
@@ -501,9 +501,9 @@ fn main() {
     }
     if !d.likely.is_empty() {
         p(&mut r, "Likely duplicates (review by hand):\n".into());
-        p(&mut r, "| Label A | Label B | Similarity |\n|---|---|---|".into());
-        for &(x, y, j) in d.likely.iter().take(a.top) {
-            p(&mut r, format!("| {} | {} | {:.2} |", md(&labels[x]), md(&labels[y]), j));
+        p(&mut r, "| Label A | Label B | Why |\n|---|---|---|".into());
+        for &(x, y, _, why) in d.likely.iter().take(a.top) {
+            p(&mut r, format!("| {} | {} | {} |", md(&labels[x]), md(&labels[y]), why));
         }
         p(&mut r, String::new());
     }

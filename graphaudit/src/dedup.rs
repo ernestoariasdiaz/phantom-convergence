@@ -1,7 +1,9 @@
 //! Audit 1: nodes that are the same thing written differently (Phantom Nodes).
-//! Certain duplicates: identical after normalisation (case, accents, punctuation,
-//! articles, simple plurals). Likely duplicates: a
-//! threshold, never merging labels whose numbers differ ("v2" vs "v3").
+//! Certain duplicates: identical after normalising case, accents, punctuation and
+//! leading articles, and of the same type when the graph has types.
+//! Likely duplicates (for review): singular/plural forms ("THE BOY" / "THE BOYS" can be
+//! different characters) and one-typo variants; never pairs that differ in a number
+//! ("v2" / "v3"), in an honorific ("MR. FEZZIWIG" / "MRS. FEZZIWIG") or in type.
 
 use std::collections::{HashMap, HashSet};
 
@@ -39,14 +41,34 @@ fn singular(w: &str) -> String {
     w.to_string()
 }
 
+const HONORIFICS: &[&str] = &["mr", "mrs", "ms", "miss", "dr", "sir", "lady", "lord", "madam", "sr", "sra", "srta", "don", "dona"];
+
+/// Case, accents, punctuation, leading articles. Plurals are kept: they decide nothing alone.
 pub fn normalize(label: &str) -> String {
     let lower: String = label.to_lowercase().chars().map(fold_char).collect();
     let cleaned: String = lower.chars().map(|c| if c.is_alphanumeric() { c } else { ' ' }).collect();
-    let mut toks: Vec<String> = cleaned.split_whitespace().map(singular).collect();
+    let mut toks: Vec<String> = cleaned.split_whitespace().map(|w| w.to_string()).collect();
     while toks.len() > 1 && ARTICLES.contains(&toks[0].as_str()) {
         toks.remove(0);
     }
     toks.join(" ")
+}
+
+/// `normalize` plus simple singularisation, used only to propose singular/plural pairs.
+pub fn plural_key(norm: &str) -> String {
+    norm.split(' ').map(singular).collect::<Vec<_>>().join(" ")
+}
+
+/// True if the two names differ in an honorific ("mr" vs "mrs"): different people.
+fn honorific_differs(a: &str, b: &str) -> bool {
+    let ta: HashSet<&str> = a.split(' ').collect();
+    let tb: HashSet<&str> = b.split(' ').collect();
+    ta.symmetric_difference(&tb).any(|w| HONORIFICS.contains(w))
+}
+
+fn possessive(raw: &str) -> bool {
+    let l = raw.to_lowercase();
+    l.contains("'s ") || l.contains("’s ") || l.ends_with("'s") || l.ends_with("’s") || l.contains("s' ")
 }
 
 fn digits(s: &str) -> String {
@@ -92,7 +114,7 @@ pub fn allowed_edits(len: usize) -> usize {
 /// of exactly one other node B (and the same type, when the graph
 /// has types). "CRUZ" -> "TAYLOR CRUZ" is proposed; "BASE" with five longer "... BASE"
 /// names is ambiguous and is not. Returns (A, B) as indices into `reps`' node ids.
-pub fn partial_names(reps: &[usize], norm: &[String], types: &[String], typed: bool) -> Vec<(usize, usize)> {
+pub fn partial_names(reps: &[usize], norm: &[String], raw: &[String], types: &[String], typed: bool) -> Vec<(usize, usize)> {
     let toks: Vec<Vec<&str>> = reps.iter().map(|&i| norm[i].split(' ').filter(|w| !w.is_empty()).collect()).collect();
     let mut by_word: HashMap<&str, Vec<usize>> = HashMap::new();
     for (k, t) in toks.iter().enumerate() {
@@ -114,6 +136,10 @@ pub fn partial_names(reps: &[usize], norm: &[String], types: &[String], typed: b
                 continue;
             }
             if typed && types[reps[a]] != types[reps[b]] {
+                continue;
+            }
+            // "CAROLINE'S HUSBAND" is someone else, related to Caroline
+            if possessive(&raw[reps[b]]) {
                 continue;
             }
             if tb[..ta.len()] == ta[..] || tb[tb.len() - ta.len()..] == ta[..] {
@@ -163,24 +189,26 @@ pub struct DedupResult {
     pub n_groups: usize,
     /// groups of node indices with ≥2 members (certain duplicates)
     pub certain: Vec<Vec<usize>>,
-    /// likely duplicates: (group a representative, group b representative, similarity)
-    pub likely: Vec<(usize, usize, f64)>,
+    /// likely duplicates: (group a representative, group b representative, similarity, reason)
+    pub likely: Vec<(usize, usize, f64, &'static str)>,
     pub norm: Vec<String>,
 }
 
-pub fn dedup(labels: &[String], strictness: f64) -> DedupResult {
+pub fn dedup(labels: &[String], types: &[String], strictness: f64) -> DedupResult {
     let n = labels.len();
+    let typed = types.iter().any(|t| !t.is_empty());
+    let ty = |i: usize| -> &str { if typed { types[i].as_str() } else { "" } };
     let norm: Vec<String> = labels.iter().map(|l| normalize(l)).collect();
     let mut uf = UnionFind::new(n);
-    let mut first: HashMap<&str, usize> = HashMap::new();
+    let mut first: HashMap<(String, String), usize> = HashMap::new();
     for (i, k) in norm.iter().enumerate() {
         if k.is_empty() {
             continue;
         }
-        match first.get(k.as_str()) {
+        match first.get(&(k.clone(), ty(i).to_string())) {
             Some(&j) => uf.union(i, j),
             None => {
-                first.insert(k, i);
+                first.insert((k.clone(), ty(i).to_string()), i);
             }
         }
     }
@@ -202,9 +230,22 @@ pub fn dedup(labels: &[String], strictness: f64) -> DedupResult {
     // trigrams (fast blocking); a pair is reported only if a few single-character edits
     // turn one into the other (typos), which keeps word swaps like "credit contract" /
     // "contract credit" apart. `strictness` scales the edit budget (1.0 = default).
-    let mut likely = Vec::new();
+    let mut likely: Vec<(usize, usize, f64, &'static str)> = Vec::new();
+    let reps: Vec<usize> = members.iter().map(|m| m[0]).collect();
+    // singular / plural forms of the same name and type: often the same thing, sometimes
+    // not ("THE BOY" and "THE BOYS" are different characters), so they are only proposed
+    let mut by_plural: HashMap<(String, String), Vec<usize>> = HashMap::new();
+    for &r in &reps {
+        by_plural.entry((plural_key(&norm[r]), ty(r).to_string())).or_default().push(r);
+    }
+    for v in by_plural.values() {
+        for i in 0..v.len() {
+            for j in (i + 1)..v.len() {
+                likely.push((v[i], v[j], 1.0, "singular/plural"));
+            }
+        }
+    }
     if strictness > 0.0 {
-        let reps: Vec<usize> = members.iter().map(|m| m[0]).collect();
         let grams: Vec<HashSet<[char; 3]>> = reps.iter().map(|&i| trigrams(&norm[i])).collect();
         let mut index: HashMap<[char; 3], Vec<usize>> = HashMap::new();
         for (g, set) in grams.iter().enumerate() {
@@ -234,8 +275,11 @@ pub fn dedup(labels: &[String], strictness: f64) -> DedupResult {
                     continue;
                 }
                 let b = &norm[reps[h]];
-                if digits(a) != digits(b) {
+                if digits(a) != digits(b) || ty(reps[g]) != ty(reps[h]) || honorific_differs(a, b) {
                     continue;
+                }
+                if plural_key(a) == plural_key(b) {
+                    continue; // already proposed as singular/plural
                 }
                 let lb = b.chars().count();
                 let budget = ((allowed_edits(la.min(lb)) as f64) * strictness).round() as usize;
@@ -244,12 +288,12 @@ pub fn dedup(labels: &[String], strictness: f64) -> DedupResult {
                 }
                 let dist = levenshtein(a, b, budget);
                 if dist <= budget {
-                    likely.push((reps[g], reps[h], 1.0 - dist as f64 / la.max(lb) as f64));
+                    likely.push((reps[g], reps[h], 1.0 - dist as f64 / la.max(lb) as f64, "typo"));
                 }
             }
         }
-        likely.sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap());
     }
+    likely.sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap());
     DedupResult { group, n_groups, certain, likely, norm }
 }
 
@@ -258,10 +302,12 @@ mod tests {
     use super::*;
     #[test]
     fn normalizes() {
-        assert_eq!(normalize("The Neural Networks"), normalize("neural network"));
+        assert_eq!(plural_key(&normalize("The Neural Networks")), plural_key(&normalize("neural network")));
+        assert_ne!(normalize("The Boys"), normalize("the boy"));
+        assert_eq!(normalize("The Ghost of Christmas Past"), normalize("GHOST OF CHRISTMAS PAST"));
         assert_eq!(normalize("Regulación"), normalize("regulacion"));
-        assert_eq!(normalize("Market-Failures!"), normalize("market failure"));
-        assert_eq!(normalize("policies"), "policy");
+        assert_eq!(normalize("Market-Failure!"), normalize("market failure"));
+        assert_eq!(plural_key("policies"), "policy");
         assert_ne!(normalize("GPT-3"), normalize("GPT-4"));
         assert_eq!(normalize("process"), "process");
     }
@@ -271,20 +317,39 @@ mod tests {
         let types = ["PERSON", "PERSON", "GEO", "GEO", "EVENT", "", "EVENT"].map(String::from).to_vec();
         let norm: Vec<String> = labels.iter().map(|l| normalize(l)).collect();
         let reps: Vec<usize> = (0..labels.len()).collect();
-        let p = partial_names(&reps, &norm, &types, true);
+        let raw: Vec<String> = labels.iter().map(|s| s.to_string()).collect();
+        let p = partial_names(&reps, &norm, &raw, &types, true);
         assert!(p.contains(&(0, 1)));          // CRUZ -> TAYLOR CRUZ
         assert!(p.contains(&(2, 3)));          // BASE -> DULCE BASE (only GEO superset)
         assert!(!p.iter().any(|&(a, _)| a == 3)); // two-word names are never the short side
         assert!(!p.iter().any(|&(a, _)| a == 5)); // untyped ELEVATOR vs EVENT: no
         let untyped = vec![String::new(); labels.len()];
-        let q = partial_names(&reps, &norm, &untyped, false);
+        let q = partial_names(&reps, &norm, &raw, &untyped, false);
         assert!(!q.iter().any(|&(a, _)| a == 2)); // BASE is ambiguous without types
+        let l2 = ["CAROLINE", "CAROLINE'S HUSBAND", "BOB", "BOB CRATCHIT"];
+        let n2: Vec<String> = l2.iter().map(|l| normalize(l)).collect();
+        let r2: Vec<String> = l2.iter().map(|s| s.to_string()).collect();
+        let t2 = vec!["PERSON".to_string(); 4];
+        let p2 = partial_names(&[0, 1, 2, 3], &n2, &r2, &t2, true);
+        assert_eq!(p2, vec![(2, 3)]); // BOB -> BOB CRATCHIT, but not CAROLINE -> her husband
+    }
+
+    #[test]
+    fn honorifics_types_and_plurals() {
+        let l: Vec<String> = ["MR. FEZZIWIG", "MRS. FEZZIWIG", "THE PHANTOM", "THE PHANTOMS", "THE BOY", "THE BOYS", "The Spirit", "SPIRIT"]
+            .iter().map(|s| s.to_string()).collect();
+        let t: Vec<String> = ["PERSON", "PERSON", "PERSON", "GEO", "PERSON", "PERSON", "PERSON", "PERSON"].iter().map(|s| s.to_string()).collect();
+        let r = dedup(&l, &t, 1.0);
+        assert_eq!(r.certain.len(), 1); // only THE SPIRIT / SPIRIT
+        assert!(!r.likely.iter().any(|&(a, b, _, _)| l[a].contains("FEZZIWIG") && l[b].contains("FEZZIWIG")));
+        assert!(!r.likely.iter().any(|&(a, b, _, _)| l[a].contains("PHANTOM") && l[b].contains("PHANTOM"))); // types differ
+        assert!(r.likely.iter().any(|&(a, b, _, why)| l[a] == "THE BOY" && l[b] == "THE BOYS" && why == "singular/plural"));
     }
 
     #[test]
     fn word_swap_is_not_a_typo() {
         let l: Vec<String> = ["credit contract", "contract credit", "market failure", "market falure"].iter().map(|s| s.to_string()).collect();
-        let r = dedup(&l, 1.0);
+        let r = dedup(&l, &vec![String::new(); l.len()], 1.0);
         assert_eq!(r.likely.len(), 1);
         assert_eq!(l[r.likely[0].1], "market falure");
         assert_eq!(levenshtein("kitten", "sitting", 5), 3);
@@ -294,10 +359,10 @@ mod tests {
     fn finds_certain_and_likely() {
         let l: Vec<String> = ["Machine Learning", "machine-learning", "Machine learnin", "Deep Learning", "Version 2", "Version 3"]
             .iter().map(|s| s.to_string()).collect();
-        let r = dedup(&l, 1.0);
+        let r = dedup(&l, &vec![String::new(); l.len()], 1.0);
         assert_eq!(r.n_groups, 5);
         assert_eq!(r.certain.len(), 1);
-        assert!(r.likely.iter().any(|&(a, b, _)| (l[a].starts_with("Machine") || l[a].starts_with("machine")) && l[b] == "Machine learnin"));
-        assert!(!r.likely.iter().any(|&(a, b, _)| l[a].starts_with("Version") && l[b].starts_with("Version")));
+        assert!(r.likely.iter().any(|&(a, b, _, _)| (l[a].starts_with("Machine") || l[a].starts_with("machine")) && l[b] == "Machine learnin"));
+        assert!(!r.likely.iter().any(|&(a, b, _, _)| l[a].starts_with("Version") && l[b].starts_with("Version")));
     }
 }

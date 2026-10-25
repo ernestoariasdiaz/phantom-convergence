@@ -11,7 +11,7 @@ ANIMUS, where 52% of nodes were duplicates and the flagship "32 sources" edge wa
 
 | Audit | Question | How |
 |---|---|---|
-| 1. Duplicate nodes | How many "distinct" nodes are the same name written differently? | Certain: identical after case, accents, punctuation, leading articles and plurals. Likely: one typo apart (edit distance), never pairing reordered words or different numbers. Partial names: a one-word name that is the first or last word of exactly one other same-type name (`CRUZ` → `TAYLOR CRUZ`), for review. |
+| 1. Duplicate nodes | How many "distinct" nodes are the same name written differently? | Certain: identical after case, accents, punctuation and leading articles, and of the same type. Likely, for review: singular/plural forms and names one typo apart (edit distance), never pairing reordered words, different numbers, different types or different honorifics (`MR.` / `MRS.`). Partial names: a one-word name that is the first or last word of exactly one other same-type name (`CRUZ` → `TAYLOR CRUZ`), for review. |
 | 2. Edge inflation | How many edges disappear once duplicate nodes merge? | Re-keys every edge on merged nodes; counts collapsed edges and new self-loops. |
 | 3. Source support vs. chance | Is "N documents state X → Y" more than two frequent entities produce anyway? | Exact hypergeometric test conditioned on the edge's own first document; Benjamini–Hochberg across **all** edges, not only the multi-source ones. |
 | 2b. Two-way edges | Is the same relationship stored as A → B and B → A? | Counted always; `--undirected` merges them (GraphRAG graphs are undirected). |
@@ -40,6 +40,24 @@ So 6 PERSON nodes stand for 4 named characters. This is a small demo dataset, no
 scale, but these are the failure modes that grow with a graph: surnames used alone, two-way duplicates and
 dangling references. graphaudit flags `DULCE` → `DULCE BASE` and `MISSION` → `MISSION TO DULCE BASE` too;
 the first is a town and the base beneath it, which is why partial names are a review list, not a merge.
+
+## Real-world check: *A Christmas Carol* (GraphRAG, 217 text units)
+
+A GraphRAG index of Dickens's *A Christmas Carol* from Project Gutenberg: 277 entities, 342 relationships.
+
+| Finding | Evidence |
+|---|---|
+| Each of the three ghosts is two nodes | `GHOST OF CHRISTMAS PAST` and `THE GHOST OF CHRISTMAS PAST`, and likewise for Present and Yet to Come; 15 such article duplicates in all (277 → 262) |
+| Characters split by first name or surname | `BOB` / `BOB CRATCHIT`, `JACOB` / `JACOB MARLEY`, `MARTHA` / `MARTHA CRATCHIT`, `DICK` / `DICK WILKINS`, `JOE` / `OLD JOE` (12 partial names to review) |
+| Generic nodes that mean different ghosts | `THE GHOST` (and `GHOST`) and `THE SPIRIT` attach to whichever ghost the chunk was about; the strongest "Scrooge — The Spirit" edge mixes three characters |
+| The license is part of the story graph | 14 Project Gutenberg boilerplate entities and 21 relationships; 2 of the 4 edges that beat chance are license text (`PROJECT GUTENBERG — UNITED STATES`) |
+| Unused entities | 23 entities have no relationship |
+
+Read by hand, the Ghost of Christmas Yet to Come is about six nodes (`THE PHANTOM`, `GHOST OF THE FUTURE`,
+`THE LAST OF THE SPIRITS`…). Those are same-meaning duplicates and need a human or embeddings; graphaudit
+catches only the spelling-level ones. This book also showed why plurals are a review list and not a merge
+(`THE BOYS` / `THE BOY` are different people), why `MR. FEZZIWIG` / `MRS. FEZZIWIG` must never pair, and why
+`CAROLINE'S HUSBAND` is not a longer form of `CAROLINE`.
 
 ## Run
 
@@ -74,10 +92,10 @@ weighted by popularity, and 10 genuine relations planted in 12 documents each.
 
 | Check | Result |
 |---|---|
-| Node count | 453 surface names → 277 certain groups → **262** with likely duplicates merged (true answer: 262) |
-| Likely duplicates | 15 pairs flagged, all genuinely the same concept; 11 of 12 present typos found |
+| Node count | 453 surface names → 332 certain groups → **262** with likely duplicates merged (true answer: 262) |
+| Likely duplicates | 71 pairs flagged (55 singular/plural, 16 typo), all genuinely the same concept |
 | Planted relations recovered | 10 of 10 |
-| Random multi-source edges called significant | 0 of 134 (the one extra hit is a planted relation whose node was split by a malformed plural) |
+| Random multi-source edges called significant | 0 (all 13 significant edges are planted relations, 3 of them repeated because a plural split the node) |
 | Fully random graph (100k nodes, 500k edges) | 0 edges called significant; runs in ~23 s |
 | February-style tension → resolution graph | 0 of 30 edges beat chance; flagged acyclic by construction |
 
