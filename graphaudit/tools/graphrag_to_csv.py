@@ -1,12 +1,16 @@
 """Convert GraphRAG output (entities / relationships parquet) to CSV for graphaudit.
 
+Works with current GraphRAG output (entities.parquet, relationships.parquet) and with
+older versions (create_final_entities.parquet, create_final_relationships.parquet,
+where the entity name column is `name` instead of `title`).
+
 usage:
-  python graphrag_to_csv.py <folder with entities.parquet and relationships.parquet> [out_folder]
+  python graphrag_to_csv.py <folder with the parquet files> [out_folder]
   python graphrag_to_csv.py --example [out_folder]   # downloads Microsoft's "Operation Dulce" example
 
 Requires: pip install pandas pyarrow
-Writes entities.csv and relationships.csv. Then:
-  graphaudit relationships.csv --nodes entities.csv --id title --label title --doc text_unit_ids
+Writes entities.csv and relationships.csv (entity names in column `title`). Then:
+  graphaudit relationships.csv --nodes entities.csv --id title --label title --doc text_unit_ids --undirected
 """
 import sys
 import urllib.request
@@ -27,6 +31,13 @@ def as_list(v):
         return [str(v)]
 
 
+def find(src: Path, *names):
+    for n in names:
+        if (src / n).exists():
+            return src / n
+    sys.exit(f"none of {names} found in {src}")
+
+
 def main():
     args = [a for a in sys.argv[1:] if a != "--example"]
     if "--example" in sys.argv:
@@ -43,19 +54,27 @@ def main():
         out = Path(args[1]) if len(args) > 1 else src
     out.mkdir(parents=True, exist_ok=True)
 
-    ent = pd.read_parquet(src / "entities.parquet")
-    rel = pd.read_parquet(src / "relationships.parquet")
+    ent = pd.read_parquet(find(src, "entities.parquet", "create_final_entities.parquet"))
+    rel = pd.read_parquet(find(src, "relationships.parquet", "create_final_relationships.parquet"))
     print("entities columns:", list(ent.columns))
     print("relationships columns:", list(rel.columns))
 
-    keep_e = [c for c in ("id", "title", "type", "frequency", "degree") if c in ent.columns]
-    e = ent[keep_e].copy()
+    e = pd.DataFrame()
+    name_col = "title" if "title" in ent.columns else "name"
+    e["title"] = ent[name_col].astype(str)
+    for c in ("id", "type", "frequency", "degree"):
+        if c in ent.columns:
+            e[c] = ent[c]
     if "text_unit_ids" in ent.columns:
         e["text_unit_ids"] = ent["text_unit_ids"].map(lambda v: ";".join(as_list(v)))
     e.to_csv(out / "entities.csv", index=False)
 
-    keep_r = [c for c in ("source", "target", "weight", "combined_degree") if c in rel.columns]
-    r = rel[keep_r].copy()
+    r = pd.DataFrame()
+    r["source"] = rel["source"].astype(str)
+    r["target"] = rel["target"].astype(str)
+    for c in ("weight", "combined_degree", "rank"):
+        if c in rel.columns:
+            r[c] = rel[c]
     if "description" in rel.columns:
         r["description"] = rel["description"].astype(str).str.slice(0, 200)
     if "text_unit_ids" in rel.columns:

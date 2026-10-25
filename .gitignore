@@ -9,3 +9,5 @@ embeddings.*
 graphaudit_out/
 graphaudit/graphrag_example/
 graphaudit/dulce_audit/
+
+graphaudit/carol*
