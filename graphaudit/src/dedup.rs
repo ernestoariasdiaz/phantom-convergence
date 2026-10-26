@@ -139,6 +139,16 @@ fn trigrams(s: &str) -> HashSet<[char; 3]> {
     p.windows(3).map(|w| [w[0], w[1], w[2]]).collect()
 }
 
+/// Same stem, a different last letter: another word, not a typo ("ACTIVIST" / "ACTIVISM",
+/// "ORGANIZER" / "ORGANIZED"). Only the last letter: "SYSTM", "FEEDBAK" (letters dropped) and
+/// "GENTLEMEN" / "GENTLEMAN" (a vowel inside) stay proposed.
+fn other_suffix(x: &str, y: &str) -> bool {
+    let (a, b): (Vec<char>, Vec<char>) = (x.chars().collect(), y.chars().collect());
+    let common = a.iter().zip(&b).take_while(|(p, q)| p == q).count();
+    let (ra, rb) = (a.len() - common, b.len() - common);
+    common >= 5 && ra == 1 && rb == 1
+}
+
 /// Levenshtein distance on chars, giving up (returns max+1) once it exceeds `max`.
 pub fn levenshtein(a: &str, b: &str, max: usize) -> usize {
     let a: Vec<char> = a.chars().collect();
@@ -181,6 +191,7 @@ pub fn partial_names(reps: &[usize], norm: &[String], raw: &[String], types: &[S
             by_word.entry(w).or_default().push(k);
         }
     }
+    let all_lower = reps.iter().all(|&i| !raw[i].chars().any(|c| c.is_uppercase()));
     let mut out = Vec::new();
     for (a, ta) in toks.iter().enumerate() {
         // only single words used alone (a surname, a first name, a bare place name):
@@ -188,8 +199,11 @@ pub fn partial_names(reps: &[usize], norm: &[String], raw: &[String], types: &[S
         if ta.len() != 1 || ta[0].chars().count() < 3 || ta[0].chars().all(|c| c.is_ascii_digit()) {
             continue;
         }
-        // a name, not a common noun: "Jobs", "CRUZ" yes; "ads", "business" no
-        if !raw[reps[a]].trim().chars().next().map_or(false, |c| c.is_uppercase()) {
+        // a name, not a common noun: "Jobs", "CRUZ" yes; "ads", "business" no. A graph written all in
+        // lower case carries no such signal: tried on five such graphs, all 27 proposals were a general
+        // and a specific concept ("communications" / "global communications"), so none are made there
+        // and the report says the check could not run.
+        if all_lower || !raw[reps[a]].trim().chars().next().map_or(false, |c| c.is_uppercase()) {
             continue;
         }
         let mut hits = Vec::new();
@@ -442,7 +456,7 @@ pub fn dedup(labels: &[String], types: &[String], strictness: f64) -> DedupResul
                 // ("SOUTH AMERICAN" / "NORTH AMERICAN" is two edits in a five-letter word)
                 let (wa, wb): (Vec<&str>, Vec<&str>) = (a.split(' ').collect(), b.split(' ').collect());
                 if wa.len() == wb.len()
-                    && wa.iter().zip(&wb).any(|(x, y)| x != y && levenshtein(x, y, 2) > if x.chars().count().max(y.chars().count()) <= 7 { 1 } else { 2 })
+                    && wa.iter().zip(&wb).any(|(x, y)| x != y && (levenshtein(x, y, 2) > if x.chars().count().max(y.chars().count()) <= 7 { 1 } else { 2 } || other_suffix(x, y)))
                 {
                     continue;
                 }
@@ -569,6 +583,17 @@ mod tests {
         let l: Vec<String> = ["Etapa", "II Etapa"].iter().map(|s| s.to_string()).collect();
         let n: Vec<String> = l.iter().map(|x| normalize(x)).collect();
         assert!(partial_names(&[0, 1], &n, &l, &vec![String::new(); 2], false).is_empty());
+    }
+
+    #[test]
+    fn lowercase_graphs_and_word_endings() {
+        let l: Vec<String> = ["curie", "marie curie", "activist", "activism", "trust state", "trust stte"].iter().map(|s| s.to_string()).collect();
+        let t = vec![String::new(); l.len()];
+        let r = dedup(&l, &t, 1.0);
+        assert!(!r.likely.iter().any(|&(a, b, _, _)| (a.min(b), a.max(b)) == (2, 3)));
+        assert!(r.likely.iter().any(|&(a, b, _, _)| (a.min(b), a.max(b)) == (4, 5)));
+        let reps: Vec<usize> = (0..l.len()).collect();
+        assert!(partial_names(&reps, &r.norm, &l, &t, false).is_empty()); // all lower case: not assessed
     }
 
     #[test]

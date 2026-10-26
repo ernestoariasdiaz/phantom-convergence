@@ -150,6 +150,36 @@ order of reliability: spelling, partial names, embeddings, shared words, nearest
 work: `CATAREY`, `ETAPA` and `TEXAS` pairs were gone and `FRANCA` / `ZONA FRANCA` became uncertain; `IESBA` / its code
 of ethics was still judged SAME.
 
+## Blind test 2: ai-knowledge-graph's five samples
+
+[ai-knowledge-graph](https://github.com/robert-mcdermott/ai-knowledge-graph) ships five example graphs with their
+source texts (Industrial Revolution, Apollo program, Marie Curie, coffee supply chain, la Alhambra): 118–236
+entities and 185–355 relationships each. graphaudit v1.9.0 was run unchanged first.
+
+The extraction itself is well grounded: 98–100% of extracted relationships quote a sentence that is in the text, and
+a standardisation step leaves almost no spelling duplicates. But 17–30% of each graph's relationships are not
+extracted: the tool adds them afterwards, marked `inferred` (an LLM linking isolated parts, and a word rule:
+`green coffee → involves → green`, `grind size → is a → size`). They are labelled honestly, and they are what
+holds each graph together:
+
+| Graph | Inferred edges | Connected pieces, all edges | Connected pieces, sourced edges only |
+|---|---|---|---|
+| Industrial Revolution | 23% | 1 | 15 |
+| Coffee supply chain | 30% | 1 | 16 |
+| Apollo program | 21% | 1 | 7 |
+| La Alhambra | 25% | 1 | 7 |
+| Marie Curie | 17% | 1 | 2 |
+
+Paths, centrality and communities computed on these graphs count the inferred edges as if the text said so.
+
+v1.9.0 missed this: it never mentioned the 318 edges without provenance, and it silently skipped partial names
+because every label is lower case. It also proposed `activist` / `activism` as a typo. Fixed in v1.10: the report
+counts edges with no provenance and the connected pieces on sourced edges alone; a different last letter on the same
+stem is another word, not a typo; and an all-lower-case graph is reported as "partial names not assessed". Making
+the partial-name check run on lower-case labels was tried and measured: all 27 proposals across the five graphs were
+a general and a specific concept (`communications` / `global communications`), so it stays off. Every earlier graph
+gives the same counts as with v1.9.0. Converter: `tools/akg_to_csv.py`.
+
 ## Control: a hand-built Neo4j graph
 
 Neo4j's *Movies* example ([neo4j-graph-examples/movies](https://github.com/neo4j-graph-examples/movies),
@@ -266,7 +296,7 @@ Columns are detected by name; override with `--src`, `--dst`, `--rel`, `--doc`, 
 Comma, semicolon and tab separators are detected. Multi-valued provenance cells such as
 `d1;d2`, `d1|d2` or `['t1', 't2']` (GraphRAG `text_unit_ids`) are split. Parquet output
 (e.g. GraphRAG) converts with `tools/graphrag_to_csv.py` (needs `pip install pandas pyarrow`); LightRAG's
-`graph_chunk_entity_relation.graphml` with `tools/lightrag_to_csv.py`, kg-gen JSON with `tools/kggen_to_csv.py` (both standard library only).
+`graph_chunk_entity_relation.graphml` with `tools/lightrag_to_csv.py`, kg-gen JSON with `tools/kggen_to_csv.py`, ai-knowledge-graph JSON with `tools/akg_to_csv.py` (all standard library only).
 
 Output in `graphaudit_out/` (or `--out`): `report.md`, `duplicates.csv`, `likely_duplicates.csv`, `partial_names.csv`, `edge_support.csv`, and `semantic_duplicates.csv` with `--embed`.
 Options: `--undirected` (A → B and B → A are one edge), `--typos S` (edit budget for likely duplicates; 1 = default, 0 = off),

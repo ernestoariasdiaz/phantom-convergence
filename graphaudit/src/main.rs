@@ -603,6 +603,33 @@ fn main() {
     }
     let mut comp_sizes: Vec<usize> = comp.values().cloned().collect();
     comp_sizes.sort_unstable_by(|x, y| y.cmp(x));
+    // edges with no provenance (inferred, added by hand or by a second model): how connected is the
+    // graph on sourced edges alone?
+    let unsourced = if has_docs { edges.iter().filter(|e| e.docs.is_empty()).count() } else { 0 };
+    let sourced_pieces: Option<(usize, usize, usize)> = if unsourced > 0 {
+        let mut sid: HashMap<usize, usize> = HashMap::new();
+        let mut pairs = Vec::new();
+        for e in edges.iter().filter(|e| !e.docs.is_empty()) {
+            let (u, v) = (g(e.u), g(e.v));
+            for x in [u, v] {
+                let n = sid.len();
+                sid.entry(x).or_insert(n);
+            }
+            pairs.push((sid[&u], sid[&v]));
+        }
+        let mut suf = dedup::UnionFind::new(sid.len());
+        for (u, v) in pairs {
+            suf.union(u, v);
+        }
+        let mut c: HashMap<usize, usize> = HashMap::new();
+        for i in 0..sid.len() {
+            *c.entry(suf.find(i)).or_default() += 1;
+        }
+        let big = c.values().cloned().max().unwrap_or(0);
+        Some((c.len(), big, sid.len()))
+    } else {
+        None
+    };
 
     // ---- write CSVs
     fs::create_dir_all(&a.out).unwrap_or_else(|e| die(&e.to_string()));
@@ -686,6 +713,10 @@ fn main() {
             p(&mut r, format!("| Edges claimed by ≥ 2 documents | {} | {} beat chance (FDR q < {}) · {} within what chance predicts |", sup.len(), sig.len(), a.alpha, artifacts));
         }
     }
+    if has_docs && edges.iter().any(|e| e.docs.is_empty()) {
+        let un = edges.iter().filter(|e| e.docs.is_empty()).count();
+        p(&mut r, format!("| Edges with no provenance | {} | not traceable to any document; see Structure |", un));
+    }
     if a.nodes.is_some() && !dangling.is_empty() {
         p(&mut r, format!("| Edge endpoints missing from the node table | {} | edges pointing to nodes that do not exist |", dangling.len()));
     }
@@ -716,6 +747,9 @@ fn main() {
             p(&mut r, format!("| {} | {} | {} |", md(&labels[x]), md(&labels[y]), why));
         }
         p(&mut r, String::new());
+    }
+    if partial.is_empty() && labels.iter().all(|l| !l.chars().any(|c| c.is_uppercase())) {
+        p(&mut r, "Partial-name duplicates were **not assessed**: every label is in lower case, so a surname used alone cannot be told from a common noun.\n".into());
     }
     if !partial.is_empty() {
         p(&mut r, format!("**{} possible partial-name duplicates**: a one-word name that is the first or last word of exactly one other {}name, such as a surname used alone. Some will be genuinely different things (a town and the base named after it); review them by hand.\n", partial.len(), if typed { "same-type " } else { "" }));
@@ -817,6 +851,11 @@ fn main() {
                 comp_sizes.iter().skip(1).take(12).map(|x| x.to_string()).collect::<Vec<_>>().join(", ")
                     + if comp_sizes.len() > 13 { ", …" } else { "" }));
         }
+    }
+    if let Some((np, big, nn)) = sourced_pieces {
+        p(&mut r, format!("- **{} of {} edges ({}) have no provenance** (inferred, or added outside extraction). On sourced edges alone the graph is **{} connected piece{}** (the largest holds {} of {} nodes): {}",
+            unsourced, edges.len(), pct(unsourced, edges.len()), np, if np == 1 { "" } else { "s" }, big, nn,
+            if np > comp_sizes.len() { "the unsourced edges are what join the rest. Paths, centrality and communities computed on the full graph count them as if the text said so." } else { "the unsourced edges do not change how connected it is." }));
     }
     p(&mut r, format!("- Degree concentration: the top 1% of nodes ({}) hold {:.0}% of all edge endpoints.", top_k, 100.0 * top_share));
     if a.nodes.is_some() {
