@@ -8,7 +8,7 @@ These are the tools behind the preprint [*Phantom Convergence: Auditing Cross-Do
 Autonomously Built Knowledge Graph*](https://doi.org/10.5281/zenodo.23622420) (Arias Díaz, 2026,
 doi:10.5281/zenodo.23622420). The code is archived on Zenodo: version 1.0.0, exactly as used in the
 paper, at [doi:10.5281/zenodo.23622368](https://doi.org/10.5281/zenodo.23622368); version 1.1.0, which adds
-`graphaudit`, at [doi:10.5281/zenodo.23623444](https://doi.org/10.5281/zenodo.23623444); version 1.3.0, with the duplicate-detection fixes found on *A Christmas Carol*, at [doi:10.5281/zenodo.23652614](https://doi.org/10.5281/zenodo.23652614); version 1.4.0, which adds LightRAG support, at [doi:10.5281/zenodo.23652737](https://doi.org/10.5281/zenodo.23652737); version 1.5.0, which adds kg-gen support and an experimental embedding check, at [doi:10.5281/zenodo.23652957](https://doi.org/10.5281/zenodo.23652957). They audit ANIMUS, an autonomous
+`graphaudit`, at [doi:10.5281/zenodo.23623444](https://doi.org/10.5281/zenodo.23623444); version 1.3.0, with the duplicate-detection fixes found on *A Christmas Carol*, at [doi:10.5281/zenodo.23652614](https://doi.org/10.5281/zenodo.23652614); version 1.4.0, which adds LightRAG support, at [doi:10.5281/zenodo.23652737](https://doi.org/10.5281/zenodo.23652737); version 1.5.0, which adds kg-gen support and an experimental embedding check, at [doi:10.5281/zenodo.23652957](https://doi.org/10.5281/zenodo.23652957); version 1.6.0, which adds an experimental language-model judge for same-entity pairs, at [doi:10.5281/zenodo.23653176](https://doi.org/10.5281/zenodo.23653176). They audit ANIMUS, an autonomous
 knowledge-graph system. Each audit removed the effect the previous version had reported:
 
 | Claim | What the audit found |
