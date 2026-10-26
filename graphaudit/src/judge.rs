@@ -33,7 +33,10 @@ const SYSTEM: &str = "You check a knowledge graph for duplicate nodes. Two nodes
 refer to one and the same real-world entity: the same person, organisation, place, event, object or concept, \
 perhaps under another name, title or spelling. Related entities are DIFFERENT: relatives, spouses, allies, \
 a predecessor and successor, a part and its whole, a general idea and a specific kind of it, two members of the \
-same family or category, two events in a series. If the descriptions do not show they are the same, answer DIFFERENT.";
+same family or category, two events in a series, numbered members of a series (Sector I, Sector II), an organisation \
+and a law, document, product or index named after it, a word and a longer name that contains it (Victoria / Victoria Station, \
+Brent / Brent Crude). An acronym in brackets may belong to only part of a long name. If the descriptions do not show \
+they are the same, answer DIFFERENT.";
 
 fn prompt(a: &Node, b: &Node) -> String {
     let show = |x: &Node| {

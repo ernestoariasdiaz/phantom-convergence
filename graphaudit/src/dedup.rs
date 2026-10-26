@@ -74,7 +74,7 @@ const TITLES: &[&str] = &["king", "queen", "prince", "princess", "emperor", "emp
 /// Types that say nothing ("UNKNOWN") are compatible with any type. An empty type (a node missing
 /// from the node table) is not: nothing is known about it at all.
 pub fn type_compatible(a: &str, b: &str) -> bool {
-    let vague = |t: &str| matches!(t.trim().to_lowercase().as_str(), "unknown" | "other" | "none" | "null");
+    let vague = |t: &str| matches!(t.trim().to_lowercase().as_str(), "unknown" | "other" | "none" | "null" | "entity_type" | "entity");
     a == b || vague(a) || vague(b)
 }
 
@@ -92,9 +92,12 @@ fn negation_pair(a: &str, b: &str) -> bool {
 /// Guards for same-meaning proposals: numbers and model markers may be missing on one side
 /// ("HENRY TUDOR" / "HENRY VII") but never different on both ("HENRY VI" / "HENRY VII");
 /// same honorifics; not opposites.
+/// But a name that is the other plus a number is a numbered member of a series ("CATAREY" / "CATAREY I",
+/// "ETAPA" / "II ETAPA"): never paired.
 pub fn names_may_match(a_norm: &str, b_norm: &str) -> bool {
     let (da, db) = (digits(a_norm), digits(b_norm));
-    (da == db || da.is_empty() || db.is_empty()) && !honorific_differs(a_norm, b_norm) && !negation_pair(a_norm, b_norm)
+    let series = da != db && without_markers(a_norm) == without_markers(b_norm);
+    (da == db || da.is_empty() || db.is_empty()) && !series && !honorific_differs(a_norm, b_norm) && !negation_pair(a_norm, b_norm)
 }
 
 fn possessive(raw: &str) -> bool {
@@ -105,7 +108,17 @@ fn possessive(raw: &str) -> bool {
 /// A regnal or ordinal Roman numeral from 1 to 39 ("ii", "vii", "xiv"), not a word like "civil" or "mix".
 fn roman(w: &str) -> bool {
     const ONES: [&str; 10] = ["", "i", "ii", "iii", "iv", "v", "vi", "vii", "viii", "ix"];
+    // OCR reads "III" as "ILL" and "II" as "LL"
     (0..4).any(|t| ONES.iter().any(|o| !(t == 0 && o.is_empty()) && w == format!("{}{}", "x".repeat(t), o)))
+        || matches!(w, "ill" | "il" | "ll" | "lll")
+}
+
+/// The name with its numbers and model markers removed: "CATAREY I" -> "catarey".
+fn without_markers(norm: &str) -> String {
+    norm.split(' ')
+        .filter(|w| !(w.chars().any(|c| c.is_ascii_digit() || c == '+' || c == '#') || roman(w) || w.chars().count() == 1))
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// Numbers and model markers in a name: tokens with a digit, '+' or '#', and Roman numerals.
@@ -207,7 +220,10 @@ pub fn partial_names(reps: &[usize], norm: &[String], raw: &[String], types: &[S
                 hits.truncate(1);
             }
         }
-        if hits.len() == 1 {
+        // "ETAPA" / "II ETAPA", "DAVID" / "DAVID 0607010100401": the longer name only adds a number, so it
+        // is a numbered member of a series. It still counts above (so "HENRY" with "HENRY VI", "HENRY VII"
+        // and "HENRY TUDOR" stays ambiguous) but is never proposed.
+        if hits.len() == 1 && without_markers(&norm[reps[hits[0]]]) != norm[reps[a]] {
             out.push((reps[a], reps[hits[0]]));
         }
     }
@@ -542,6 +558,17 @@ mod tests {
         let t = vec![String::new(); 5];
         let p = shared_word_pairs(&[0, 1, 2, 3, 4], &norm, &t, false, 2);
         assert_eq!(p.iter().map(|&(a, b, _)| (a, b)).collect::<Vec<_>>(), vec![(0, 1)]); // "law" is in 3 names
+    }
+
+    #[test]
+    fn numbered_series_and_ocr_numerals() {
+        assert!(!names_may_match(&normalize("Catarey"), &normalize("Catarey I")));
+        assert!(!names_may_match(&normalize("Parque del Este ILL"), &normalize("Parque del Este I")));
+        assert!(!names_may_match(&normalize("Parque del Este ILL"), &normalize("Parque del Este IL")));
+        assert!(names_may_match(&normalize("Henry Tudor"), &normalize("Henry VII")));
+        let l: Vec<String> = ["Etapa", "II Etapa"].iter().map(|s| s.to_string()).collect();
+        let n: Vec<String> = l.iter().map(|x| normalize(x)).collect();
+        assert!(partial_names(&[0, 1], &n, &l, &vec![String::new(); 2], false).is_empty());
     }
 
     #[test]

@@ -271,7 +271,8 @@ fn main() {
             }
             idx.insert(id.clone(), ids.len());
             labels.push(r.get(i_lab).map(|l| l.trim().trim_matches('"').to_string()).unwrap_or_else(|| id.clone()));
-            types.push(i_typ.and_then(|i| r.get(i)).map(|t| t.trim().trim_matches('"').to_uppercase()).unwrap_or_default());
+            // extraction prompts leak markup into types: "<ORGANIZATION", "<ENTITY_TYPE>"
+            types.push(i_typ.and_then(|i| r.get(i)).map(|t| t.trim().trim_matches(|c| c == '"' || c == '<' || c == '>' || c == ' ').to_uppercase()).unwrap_or_default());
             if let Some(d) = i_desc.and_then(|i| r.get(i)) {
                 descs.insert(ids.len(), d.trim().chars().take(400).collect());
             }
@@ -358,7 +359,7 @@ fn main() {
     for &(x, y) in &partial {
         known.insert((g(x).min(g(y)), g(x).max(g(y))));
     }
-    let vague = |t: &str| t.is_empty() || matches!(t.to_lowercase().as_str(), "unknown" | "other" | "none" | "null");
+    let vague = |t: &str| t.is_empty() || matches!(t.to_lowercase().as_str(), "unknown" | "other" | "none" | "null" | "entity_type" | "entity");
     let pair_ok = |x: usize, y: usize| -> bool {
         (!typed || vague(&types[x]) || vague(&types[y]) || types[x] == types[y]) && dedup::names_may_match(&d.norm[x], &d.norm[y])
     };
@@ -432,6 +433,9 @@ fn main() {
             skipped_abstract = before - cands.len();
         }
         if cands.len() > a.judge_max {
+            // keep the sources in order of reliability (spelling, partial names, embeddings, shared words,
+            // nearest neighbours). Sharing the budget between them was tried in v1.9 and, on a 7,945-entity
+            // graph, brought in more wrong SAME verdicts than right ones.
             eprintln!("graphaudit: {} candidate pairs, judging the first {} (raise with --judge-max)", cands.len(), a.judge_max);
             cands.truncate(a.judge_max);
         }

@@ -134,6 +134,22 @@ The wrong ones show three weaknesses, recorded here before fixing them:
 - An acronym or place word alone was matched to a longer, different thing: `IESBA` / its code of ethics,
   `FRANCA` / `ZONA FRANCA`, `TEXAS` / `TEXAS (WTI)` (an oil benchmark).
 
+**Fixed in v1.9 (so a rerun on this graph is no longer blind):** a name that is another plus a number is a numbered
+member of a series and never pairs (`CATAREY` / `CATAREY I`, `ETAPA` / `II ETAPA`, `WWDC` / `WWDC 2016`); OCR's `ILL`,
+`IL` and `LL` count as Roman numerals; markup is stripped from types (`<ORGANIZATION` → `ORGANIZATION`,
+`<ENTITY_TYPE>` counts as unknown); and the prompt names numbered series, things named after an organisation, and a
+word inside a longer name as DIFFERENT (with examples not taken from this graph). Every earlier graph gives the same
+counts as before, except one Apple partial name fewer (`WWDC` / `WWDC 2016`).
+
+**One v1.9 change was measured and reverted.** Sharing the 1,000-pair budget in turn between candidate sources let
+in pairs from shared words and nearest neighbours, which are harder. Rerun on this graph: 373 SAME, and a new random
+sample of 60 had 43 right, 6 arguable, 11 wrong (6 of them from nearest neighbours, mostly a generic name against a
+specific one: `TERCERA RESOLUCIÓN` / `TERCERA RESOLUCIÓN DEL 30 DE MARZO DEL 2004`). Scaled up, that is fewer right
+verdicts (about 270 against 350) and more wrong ones (about 70 against 45) than v1.8. The budget is again spent in
+order of reliability: spelling, partial names, embeddings, shared words, nearest neighbours. The targeted fixes did
+work: `CATAREY`, `ETAPA` and `TEXAS` pairs were gone and `FRANCA` / `ZONA FRANCA` became uncertain; `IESBA` / its code
+of ethics was still judged SAME.
+
 ## Control: a hand-built Neo4j graph
 
 Neo4j's *Movies* example ([neo4j-graph-examples/movies](https://github.com/neo4j-graph-examples/movies),
