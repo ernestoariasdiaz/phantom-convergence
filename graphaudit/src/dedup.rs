@@ -216,6 +216,41 @@ pub fn partial_names(reps: &[usize], norm: &[String], raw: &[String], types: &[S
     out
 }
 
+/// Candidate pairs for a judge: two names of compatible type that share a rare word
+/// ("HENRY TUDOR" / "HENRY VII", "DUKE OF YORK" / "RICHARD, DUKE OF YORK"). A word shared by
+/// more than `max_df` names ("LAW", "PROPERTY") is too common to suggest anything.
+pub fn shared_word_pairs(reps: &[usize], norm: &[String], types: &[String], typed: bool, max_df: usize) -> Vec<(usize, usize, usize)> {
+    const STOP: &[&str] = &["of", "and", "the", "in", "on", "for", "to", "de", "la", "el", "los", "las", "del", "y", "a", "an"];
+    let mut by_word: HashMap<&str, Vec<usize>> = HashMap::new();
+    for &r in reps {
+        for w in norm[r].split(' ').collect::<HashSet<_>>() {
+            if w.chars().count() >= 3 && !STOP.contains(&w) && !roman(w) {
+                by_word.entry(w).or_default().push(r);
+            }
+        }
+    }
+    let mut seen: HashSet<(usize, usize)> = HashSet::new();
+    let mut out = Vec::new();
+    for v in by_word.values() {
+        if v.len() < 2 || v.len() > max_df {
+            continue;
+        }
+        for i in 0..v.len() {
+            for j in (i + 1)..v.len() {
+                let (x, y) = (v[i].min(v[j]), v[i].max(v[j]));
+                if typed && !type_compatible(&types[x], &types[y]) {
+                    continue;
+                }
+                if seen.insert((x, y)) {
+                    out.push((x, y, v.len()));
+                }
+            }
+        }
+    }
+    out.sort_by_key(|&(x, y, df)| (df, x, y));
+    out
+}
+
 pub struct UnionFind {
     p: Vec<usize>,
 }
@@ -498,6 +533,15 @@ mod tests {
         assert!(names_may_match(&normalize("Henry Tudor"), &normalize("Henry VII")));
         assert!(!names_may_match(&normalize("Henry VI"), &normalize("Henry VII")));
         assert!(!names_may_match(&normalize("Mr. Fezziwig"), &normalize("Mrs. Fezziwig")));
+    }
+
+    #[test]
+    fn shared_rare_words() {
+        let l = ["Henry Tudor", "Henry VII", "Property Law", "Civil Law", "Roman Law"];
+        let norm: Vec<String> = l.iter().map(|x| normalize(x)).collect();
+        let t = vec![String::new(); 5];
+        let p = shared_word_pairs(&[0, 1, 2, 3, 4], &norm, &t, false, 2);
+        assert_eq!(p.iter().map(|&(a, b, _)| (a, b)).collect::<Vec<_>>(), vec![(0, 1)]); // "law" is in 3 names
     }
 
     #[test]

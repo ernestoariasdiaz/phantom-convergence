@@ -143,6 +143,37 @@ The one clear duplicate ranks below `GOLD` / `SILVER` (0.886), `HOUSE OF LANCAST
 `semantic_duplicates.csv` is a list for a human to skim, never a merge; finding same-meaning duplicates reliably
 needs more than cosine similarity (for example, reading the descriptions with an LLM and asking).
 
+## Same entity, judged by a language model (experimental, `--judge`)
+
+Embeddings measure topic, not identity. `--judge` instead asks a local instruction model, for each candidate
+pair, whether the two nodes are one and the same entity, showing it both names, types and descriptions.
+Each pair is asked twice, A–B and B–A, and counts only if both answers are SAME; related entities (spouses,
+predecessor and successor, a part and its whole, two battles in a series) are defined as DIFFERENT in the prompt.
+
+Candidates are every pair the other checks propose, plus names of compatible type that share a rare word
+(`HENRY TUDOR` / `HENRY VII`), plus each name's three nearest embedding neighbours when `--embed` is also given.
+On the Wars of the Roses graph that is 110 pairs, and they include every duplicate found by hand.
+
+```powershell
+llama-server -m gemma-4-E2B-it-UD-Q4_K_XL.gguf -ngl 99 -c 4096 --port 8080 --reasoning-budget 0
+graphaudit relationships.csv --nodes entities.csv --desc description --judge http://127.0.0.1:8080 --out audit_judge
+```
+
+**Result on the Wars of the Roses graph with Gemma 4 E2B (Q4, 2B parameters):**
+
+| | Pairs | Verdicts |
+|---|---|---|
+| Known person duplicates | 7 | 3 same (`EDWARD IV` / `KING EDWARD IV`, `EDWARD` / `KING EDWARD IV`, `WARWICK` / `RICHARD NEVILLE, EARL OF WARWICK`), 3 uncertain (`EDWARD` / `EDWARD IV`, `MARGARET` / `MARGARET OF ANJOU`, `HENRY TUDOR` / `HENRY VII`), 1 different (`HENRY` / `HENRY VI`: "a generic name") |
+| All candidates | 110 | 11 same: 9 right (the 3 above, 4 singular/plural pairs, `DIABETES` / `DIABETES MELLITUS`, `RICHARD, DUKE OF YORK` / `DUKE OF YORK`), 1 arguable (`ANGLO-AMERICAN LAW` / `ANGLO-AMERICAN SYSTEMS`), 1 wrong (`HOUSE OF LANCASTER` / `HOUSE OF YORK`: "rival factions"); 10 uncertain; 89 different, including `HENRY VI` / `HENRY TUDOR`, every pair of battles, insulin types and tenancies |
+
+Compared with embeddings on the same graph (1 duplicate found, ranked below gold / silver), a small model reading
+descriptions separates "same" from "related" far better, but misses half the duplicates. `HENRY TUDOR` / `HENRY VII`
+failed because the graph's own description of `HENRY VII` is a sentence about someone marrying him; the model read
+it as a different person. A larger model may do better; that is untested.
+
+Output: `judged_pairs.csv` with every candidate, the verdict (same / different / uncertain when the two orders
+disagree) and the model's reason. A model can be wrong; the list is for review before merging.
+
 ## Run
 
 ```powershell

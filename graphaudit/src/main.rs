@@ -14,6 +14,7 @@ mod dedup;
 mod embed;
 mod http;
 mod json;
+mod judge;
 mod stats;
 
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -47,6 +48,8 @@ struct Args {
     embed: Option<String>,
     embed_min: f32,
     desc: Option<String>,
+    judge: Option<String>,
+    judge_max: usize,
 }
 
 const HELP: &str = "graphaudit — audit a knowledge graph's own numbers
@@ -70,10 +73,14 @@ USAGE: graphaudit <edges.csv> [options]
   --embed URL        experimental: list same-meaning candidates with an embedding server, e.g.
                      http://127.0.0.1:8081 (llama-server -m bge-m3 --embeddings)
   --embed-min C      cosine similarity to propose a pair (default 0.90)
-  --desc COL         node-table description column to embed with each name (off by default)
+  --desc COL         node-table description column, used by --embed and --judge
+  --judge URL        ask an instruction model (llama-server, e.g. http://127.0.0.1:8080) whether
+                     candidate pairs are the same entity, reading names, types and descriptions;
+                     each pair is asked in both orders and counts only if both say SAME
+  --judge-max N      most pairs to judge (default 300)
 
 Writes DIR/report.md, duplicates.csv, likely_duplicates.csv, partial_names.csv, edge_support.csv
-(and semantic_duplicates.csv with --embed).";
+(and semantic_duplicates.csv with --embed, judged_pairs.csv with --judge).";
 
 fn die(m: &str) -> ! {
     eprintln!("graphaudit: {m}");
@@ -99,6 +106,8 @@ fn parse_args() -> Args {
         embed: None,
         embed_min: 0.90,
         desc: None,
+        judge: None,
+        judge_max: 300,
     };
     let mut it = env::args().skip(1);
     let mut pos = None;
@@ -121,6 +130,8 @@ fn parse_args() -> Args {
             "--embed" => a.embed = Some(v("--embed")),
             "--embed-min" => a.embed_min = v("--embed-min").parse().unwrap_or_else(|_| die("bad --embed-min")),
             "--desc" => a.desc = Some(v("--desc")),
+            "--judge" => a.judge = Some(v("--judge")),
+            "--judge-max" => a.judge_max = v("--judge-max").parse().unwrap_or_else(|_| die("bad --judge-max")),
             "-h" | "--help" => {
                 println!("{HELP}");
                 std::process::exit(0)
@@ -325,36 +336,96 @@ fn main() {
     let linked: HashSet<(usize, usize)> = edges.iter().map(|e| (g(e.u).min(g(e.v)), g(e.u).max(g(e.v)))).collect();
 
     // same meaning in different words, through embeddings (optional)
-    let semantic: Vec<(usize, usize, f32)> = match &a.embed {
-        None => Vec::new(),
-        Some(url) => {
-            let texts: Vec<String> = reps_of
-                .iter()
-                .map(|&i| match descs.get(&i) {
-                    Some(d) if !d.is_empty() => format!("{}: {}", labels[i], d),
-                    _ => labels[i].clone(),
-                })
-                .collect();
-            let vecs = embed::embed_texts(url, &texts).unwrap_or_else(|e| die(&e));
-            let mut known: HashSet<(usize, usize)> = HashSet::new();
-            for &(x, y, _, _) in &d.likely {
-                known.insert((g(x).min(g(y)), g(x).max(g(y))));
-            }
-            for &(x, y) in &partial {
-                known.insert((g(x).min(g(y)), g(x).max(g(y))));
-            }
-            let vague = |t: &str| t.is_empty() || matches!(t.to_lowercase().as_str(), "unknown" | "other" | "none" | "null");
-            embed::similar_pairs(&vecs, a.embed_min, |p, q| {
-                let (x, y) = (reps_of[p], reps_of[q]);
-                (!typed || vague(&types[x]) || vague(&types[y]) || types[x] == types[y])
-                    && !known.contains(&(g(x).min(g(y)), g(x).max(g(y))))
-                    && dedup::names_may_match(&d.norm[x], &d.norm[y])
-            })
-            .into_iter()
-            .map(|(p, q, c)| (reps_of[p], reps_of[q], c))
-            .collect()
+    let text_of = |i: usize| -> String {
+        match descs.get(&i) {
+            Some(d) if !d.is_empty() => format!("{}: {}", labels[i], d),
+            _ => labels[i].clone(),
         }
     };
+    let vecs: Option<Vec<Vec<f32>>> = a.embed.as_ref().map(|url| {
+        let texts: Vec<String> = reps_of.iter().map(|&i| text_of(i)).collect();
+        embed::embed_texts(url, &texts).unwrap_or_else(|e| die(&e))
+    });
+    let mut known: HashSet<(usize, usize)> = HashSet::new();
+    for &(x, y, _, _) in &d.likely {
+        known.insert((g(x).min(g(y)), g(x).max(g(y))));
+    }
+    for &(x, y) in &partial {
+        known.insert((g(x).min(g(y)), g(x).max(g(y))));
+    }
+    let vague = |t: &str| t.is_empty() || matches!(t.to_lowercase().as_str(), "unknown" | "other" | "none" | "null");
+    let pair_ok = |x: usize, y: usize| -> bool {
+        (!typed || vague(&types[x]) || vague(&types[y]) || types[x] == types[y]) && dedup::names_may_match(&d.norm[x], &d.norm[y])
+    };
+    let semantic: Vec<(usize, usize, f32)> = match &vecs {
+        None => Vec::new(),
+        Some(vecs) => embed::similar_pairs(vecs, a.embed_min, |p, q| {
+            let (x, y) = (reps_of[p], reps_of[q]);
+            pair_ok(x, y) && !known.contains(&(g(x).min(g(y)), g(x).max(g(y))))
+        })
+        .into_iter()
+        .map(|(p, q, c)| (reps_of[p], reps_of[q], c))
+        .collect(),
+    };
+
+    // an instruction model reads candidate pairs and says whether they are the same entity (optional)
+    let mut judged: Vec<(usize, usize, &'static str, judge::Verdict, String)> = Vec::new();
+    if let Some(url) = &a.judge {
+        if descs.is_empty() {
+            eprintln!("graphaudit: --judge without --desc: the model sees names and types only");
+        }
+        let mut cands: Vec<(usize, usize, &'static str)> = Vec::new();
+        let mut seen: HashSet<(usize, usize)> = HashSet::new();
+        let mut add = |x: usize, y: usize, why: &'static str, cands: &mut Vec<(usize, usize, &'static str)>| {
+            let k = (g(x).min(g(y)), g(x).max(g(y)));
+            if k.0 != k.1 && seen.insert(k) {
+                cands.push((x, y, why));
+            }
+        };
+        for &(x, y, _, why) in &d.likely {
+            add(x, y, why, &mut cands);
+        }
+        for &(x, y) in &partial {
+            add(x, y, "partial name", &mut cands);
+        }
+        for &(x, y, _) in &semantic {
+            add(x, y, "embedding", &mut cands);
+        }
+        for (x, y, _) in dedup::shared_word_pairs(&reps_of, &d.norm, &types, typed, 6) {
+            if pair_ok(x, y) {
+                add(x, y, "shared word", &mut cands);
+            }
+        }
+        if let Some(vecs) = &vecs {
+            // each name's three nearest neighbours
+            for p in 0..vecs.len() {
+                let mut best: Vec<(f32, usize)> = (0..vecs.len())
+                    .filter(|&q| q != p)
+                    .map(|q| (vecs[p].iter().zip(&vecs[q]).map(|(u, v)| u * v).sum::<f32>(), q))
+                    .collect();
+                best.sort_by(|u, v| v.0.partial_cmp(&u.0).unwrap());
+                for &(_, q) in best.iter().take(3) {
+                    let (x, y) = (reps_of[p], reps_of[q]);
+                    if pair_ok(x, y) {
+                        add(x, y, "nearest neighbour", &mut cands);
+                    }
+                }
+            }
+        }
+        if cands.len() > a.judge_max {
+            eprintln!("graphaudit: {} candidate pairs, judging the first {} (raise with --judge-max)", cands.len(), a.judge_max);
+            cands.truncate(a.judge_max);
+        }
+        let ep = judge::endpoint(url).unwrap_or_else(|e| die(&e));
+        for (k, &(x, y, why)) in cands.iter().enumerate() {
+            if k % 25 == 0 {
+                eprintln!("judging {}/{} pairs…", k, cands.len());
+            }
+            let node = |i: usize| judge::Node { name: &labels[i], kind: &types[i], desc: descs.get(&i).map(|s| s.as_str()).unwrap_or("") };
+            let (v, reason) = judge::judge(&ep, &node(x), &node(y)).unwrap_or_else(|e| die(&e));
+            judged.push((x, y, why, v, reason));
+        }
+    }
 
     // ---- 2. edge inflation
     let raw_keys: HashSet<(usize, usize, &str)> =
@@ -504,6 +575,13 @@ fn main() {
         }
         fs::write(a.out.join("semantic_duplicates.csv"), s).unwrap();
     }
+    if a.judge.is_some() {
+        let mut s = String::from("label_a,label_b,verdict,proposed_by,reason,linked_by_an_edge\n");
+        for (x, y, why, v, reason) in &judged {
+            s += &format!("{},{},{},{},{},{}\n", csv_cell(&labels[*x]), csv_cell(&labels[*y]), v.as_str(), why, csv_cell(reason), linked.contains(&(g(*x).min(g(*y)), g(*x).max(g(*y)))));
+        }
+        fs::write(a.out.join("judged_pairs.csv"), s).unwrap();
+    }
     let few_docs = has_docs && n_docs < 20;
     let rep = |grp: usize| -> &str {
         let i = (0..n_nodes).find(|&i| g(i) == grp).unwrap();
@@ -593,6 +671,20 @@ fn main() {
         }
         p(&mut r, String::new());
     }
+    if a.judge.is_some() {
+        let same: Vec<_> = judged.iter().filter(|j| j.3 == judge::Verdict::Same).collect();
+        let unsure = judged.iter().filter(|j| j.3 == judge::Verdict::Disagree).count();
+        p(&mut r, format!("**Judged by a language model: {} of {} candidate pairs are the same entity** (both orders answered SAME{}); {} got opposite answers in the two orders. Candidates come from the lists above, names sharing a rare word{}. A model can be wrong: check before merging.\n",
+            same.len(), judged.len(), if descs.is_empty() { ", names and types only" } else { ", reading descriptions" }, unsure,
+            if vecs.is_some() { " and each name's nearest embedding neighbours" } else { "" }));
+        if !same.is_empty() {
+            p(&mut r, "| Label A | Label B | Proposed by | Model's reason |\n|---|---|---|---|".into());
+            for j in same.iter().take(a.top.max(30)) {
+                p(&mut r, format!("| {} | {} | {} | {} |", md(&labels[j.0]), md(&labels[j.1]), j.2, md(&j.4)));
+            }
+            p(&mut r, String::new());
+        }
+    }
     if a.embed.is_some() {
         p(&mut r, format!("**{} possible same-meaning duplicates** (embedding cosine ≥ {:.2}{}, not already listed above; numbers, honorifics, opposites and types are guarded as above). Experimental: on a real graph with bge-m3, related but different things (gold / silver, two royal houses) scored above true duplicates. Skim this list; never merge from it.\n",
             semantic.len(), a.embed_min, if descs.is_empty() { ", names only" } else { ", names with descriptions" }));
@@ -676,7 +768,8 @@ fn main() {
         p(&mut r, format!("- Nodes declared but never used in an edge: {} · edge endpoints missing from the node table: {}{}.", isolated, dangling.len(),
             if dl.is_empty() { String::new() } else { format!(" ({})", dl.iter().take(10).map(|x| format!("`{}`", md(x))).collect::<Vec<_>>().join(", ")) }));
     }
-    p(&mut r, format!("\nFiles: `duplicates.csv`, `likely_duplicates.csv`, `partial_names.csv`, `edge_support.csv`{}.", if a.embed.is_some() { ", `semantic_duplicates.csv`" } else { "" }));
+    p(&mut r, format!("\nFiles: `duplicates.csv`, `likely_duplicates.csv`, `partial_names.csv`, `edge_support.csv`{}{}.",
+        if a.embed.is_some() { ", `semantic_duplicates.csv`" } else { "" }, if a.judge.is_some() { ", `judged_pairs.csv`" } else { "" }));
 
     fs::write(a.out.join("report.md"), &r).unwrap();
     let mut by_kind: BTreeMap<&str, String> = BTreeMap::new();
