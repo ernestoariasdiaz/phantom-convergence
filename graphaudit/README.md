@@ -107,6 +107,33 @@ as certain duplicates (punctuation was stripped), `IPHONE 4` / `IPHONE 4S` and `
 as typos, `SOUTH AMERICAN` / `NORTH AMERICAN` too, and bare years and common nouns (`2020`, `ads`) were proposed as
 partial names.
 
+## Blind test: a graph no rule was tuned on
+
+The author's own GraphRAG index of Dominican banking regulation (Superintendencia de Bancos circulars and
+instructions, Central Bank reports; many scanned PDFs): 7,945 entities, 8,120 relationships, 1,099 text units.
+graphaudit v1.8.0 was run unchanged, with `--embed` (bge-m3) and `--judge` (Qwen3-4B), before any code was touched.
+
+| Finding | Evidence |
+|---|---|
+| The regulator is about 40 nodes | `SUPERINTENDENCIA DE BANCOS`, `…DELAREPÚBLICADOMINICANA`, `…DEUVREPÚBLICADOMINICANA`, `…DELAHEPUBÜCALX)`: OCR damage on scanned PDFs, each spelling a new node |
+| Circulars are split | `CIRCULARSIB: NO. 010/17` in 6 spellings, several others in 4–5 |
+| Broken entity types | 110 entities typed `<ORGANIZATION`, `<GEO`, `<PERSON` or `<ENTITY_TYPE>`: the extraction prompt's markup leaked into the data |
+| 39% of entities are unused | 3,066 of 7,945 have no relationship |
+| 75 of 803 multi-source edges beat chance | the strongest is `SANTO DOMINGO — REPÚBLICA DOMINICANA` (161 documents): letterhead text, not a finding |
+
+Spelling checks: 222 certain duplicates, 479 likely pairs, 260 partial names. The judge hit its 1,000-pair cap,
+so names sharing a rare word and nearest neighbours were never judged. Of the 1,000 judged: 462 same, 230
+uncertain, 308 different. A random sample of 60 SAME verdicts checked by hand: **46 right, 8 arguable, 6 wrong**.
+
+The wrong ones show three weaknesses, recorded here before fixing them:
+
+- A numeral on one side only is allowed for same-meaning pairs (meant for `HENRY TUDOR` / `HENRY VII`), so
+  `CATAREY` / `CATAREY I` and `ETAPA` / `II ETAPA` (different sectors) were proposed and judged SAME; OCR turns
+  `III` into `ILL`, which no numeral rule sees (`PARQUE DEL ESTE ILL` / `PARQUE DEL ESTE I`).
+- Malformed types (`<ORGANIZATION`) are not cleaned, so they never match `ORGANIZATION`.
+- An acronym or place word alone was matched to a longer, different thing: `IESBA` / its code of ethics,
+  `FRANCA` / `ZONA FRANCA`, `TEXAS` / `TEXAS (WTI)` (an oil benchmark).
+
 ## Control: a hand-built Neo4j graph
 
 Neo4j's *Movies* example ([neo4j-graph-examples/movies](https://github.com/neo4j-graph-examples/movies),
