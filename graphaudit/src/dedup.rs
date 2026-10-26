@@ -196,7 +196,10 @@ pub fn partial_names(reps: &[usize], norm: &[String], raw: &[String], types: &[S
     for (a, ta) in toks.iter().enumerate() {
         // only single words used alone (a surname, a first name, a bare place name):
         // longer short names collide with qualifiers like "PANEL (IN DULCE BASE)"
-        if ta.len() != 1 || ta[0].chars().count() < 3 || ta[0].chars().all(|c| c.is_ascii_digit()) {
+        // a title alone ("LORD", "KING") is not a short name for whoever holds it
+        if ta.len() != 1 || ta[0].chars().count() < 3 || ta[0].chars().all(|c| c.is_ascii_digit())
+            || HONORIFICS.contains(&ta[0]) || TITLES.contains(&ta[0])
+        {
             continue;
         }
         // a name, not a common noun: "Jobs", "CRUZ" yes; "ads", "business" no. A graph written all in
@@ -457,7 +460,7 @@ pub fn dedup(labels: &[String], types: &[String], strictness: f64) -> DedupResul
                 // ("SOUTH AMERICAN" / "NORTH AMERICAN" is two edits in a five-letter word)
                 let (wa, wb): (Vec<&str>, Vec<&str>) = (a.split(' ').collect(), b.split(' ').collect());
                 if wa.len() == wb.len()
-                    && wa.iter().zip(&wb).any(|(x, y)| x != y && (levenshtein(x, y, 2) > if x.chars().count().max(y.chars().count()) <= 7 { 1 } else { 2 } || other_suffix(x, y) || (x.chars().count() <= 2 && y.chars().count() <= 2)))
+                    && wa.iter().zip(&wb).any(|(x, y)| x != y && (levenshtein(x, y, 2) > if x.chars().count().max(y.chars().count()) <= 7 { 1 } else { 2 } || other_suffix(x, y) || (x.chars().count() <= 3 && y.chars().count() <= 3)))
                 {
                     continue;
                 }
@@ -597,8 +600,11 @@ mod tests {
         assert!(partial_names(&reps, &r.norm, &l, &t, false).is_empty()); // all lower case, untyped: not assessed
         let tp: Vec<String> = ["person", "person", "concept", "concept", "concept", "concept"].iter().map(|s| s.to_string()).collect();
         assert_eq!(partial_names(&reps, &r.norm, &l, &tp, true), vec![(0, 1)]); // people only
-        let g: Vec<String> = ["uk government", "us government"].iter().map(|s| s.to_string()).collect();
-        assert!(dedup(&g, &vec![String::new(); 2], 1.0).likely.is_empty());
+        let g: Vec<String> = ["uk government", "us government", "bob cratchit", "boy cratchit"].iter().map(|s| s.to_string()).collect();
+        assert!(dedup(&g, &vec![String::new(); 4], 1.0).likely.is_empty());
+        let lm: Vec<String> = ["LORD", "LORD MAYOR"].iter().map(|s| s.to_string()).collect();
+        let nl: Vec<String> = lm.iter().map(|x| normalize(x)).collect();
+        assert!(partial_names(&[0, 1], &nl, &lm, &vec![String::new(); 2], false).is_empty());
     }
 
     #[test]

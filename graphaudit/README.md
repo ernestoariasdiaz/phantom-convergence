@@ -204,6 +204,28 @@ listed; two different words of one or two letters are never a typo; and in a low
 checked between names typed as people only (2024: `altman` / `sam altman`; 2025: `musk` / `elon musk`; the five
 ai-knowledge-graph samples add one, `sultanes` / `sultanes nazaríes`). Every earlier graph gives the same counts.
 
+## Blind test 4: two GraphRAG indexes of the same book
+
+Microsoft's GraphRAG repository keeps a real index for its tests (`tests/verbs/data`), with its source document:
+*A Christmas Carol*, the same book as the Neo4j blog index above. The two were built with different settings
+(42 text units against 217), so this is not a controlled reproducibility test, but it shows how much "the graph of
+a book" depends on how it was built (`tools/compare_entities.py`):
+
+| | Microsoft test index | Neo4j blog index |
+|---|---|---|
+| Text units | 42 | 217 |
+| Distinct entities (after case, punctuation, articles) | 497 | 261 |
+| Shared | 171 (Jaccard 0.29) | |
+| People | 195 | 139, of which 89 shared |
+
+One has `HE` and `SHE` as people; the other has `ABEL` and `BELSHAZZAR` (biblical references in the text). The
+Microsoft index also has 32 relationships pointing to entities missing from its own entity table, and its only
+edge that beats chance is `BOB CRATCHIT — TINY TIM` (9 text units, 3.5 expected).
+
+graphaudit v1.11.0, run unchanged, proposed `BOB CRATCHIT` / `BOY CRATCHIT` as a typo (father and son) and
+`LORD` / `LORD MAYOR` as a partial name. Fixed in v1.12: a change confined to words of three letters or fewer is never
+a typo, and a title or honorific alone is never proposed as a short name. Every earlier graph gives the same counts.
+
 ## Control: a hand-built Neo4j graph
 
 Neo4j's *Movies* example ([neo4j-graph-examples/movies](https://github.com/neo4j-graph-examples/movies),
