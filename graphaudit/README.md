@@ -11,7 +11,7 @@ ANIMUS, where 52% of nodes were duplicates and the flagship "32 sources" edge wa
 
 | Audit | Question | How |
 |---|---|---|
-| 1. Duplicate nodes | How many "distinct" nodes are the same name written differently? | Certain: identical after case, accents, punctuation and leading articles, and of the same type. Likely, for review: singular/plural forms and names one typo apart (edit distance), or a leading title (`KING EDWARD IV` / `EDWARD IV`), never pairing reordered words, different numbers (Arabic or Roman: `HENRY VI` / `HENRY VII`), opposites (`MOVABLE` / `IMMOVABLE`), different types or different honorifics (`MR.` / `MRS.`). An `UNKNOWN` type matches any type. Partial names: a one-word name that is the first or last word of exactly one other same-type name (`CRUZ` → `TAYLOR CRUZ`), for review. |
+| 1. Duplicate nodes | How many "distinct" nodes are the same name written differently? | Certain: identical after case, accents, punctuation and leading articles, and of the same type. Likely, for review: singular/plural forms and names one typo apart (edit distance), a leading title (`KING EDWARD IV` / `EDWARD IV`) or a legal form (`APPLE` / `APPLE INC.`), never pairing reordered words, different numbers or model markers (`HENRY VI` / `HENRY VII`, `IPHONE 4` / `IPHONE 4S`, `APPLE TV` / `APPLE TV+`, `GROUP A` / `GROUP B`), whole-word swaps (`SOUTH` / `NORTH`), opposites (`MOVABLE` / `IMMOVABLE`), different types or different honorifics (`MR.` / `MRS.`). An `UNKNOWN` type matches any type. Partial names: a capitalised one-word name that is the first or last word of exactly one other same-type name, or of several that all contain the shortest (`JOBS` → `STEVE JOBS`), for review. |
 | 2. Edge inflation | How many edges disappear once duplicate nodes merge? | Re-keys every edge on merged nodes; counts collapsed edges and new self-loops. |
 | 3. Source support vs. chance | Is "N documents state X → Y" more than two frequent entities produce anyway? | Exact hypergeometric test conditioned on the edge's own first document; Benjamini–Hochberg across **all** edges, not only the multi-source ones. |
 | 2b. Two-way edges | Is the same relationship stored as A → B and B → A? | Counted always; `--undirected` merges them (GraphRAG graphs are undirected). |
@@ -84,12 +84,53 @@ Three texts on unrelated subjects explain three pieces, not 47. graphaudit finds
 This graph also showed why opposites (`MOVABLE PROPERTY` / `IMMOVABLE PROPERTY`, one edit apart) and Roman numerals
 must never pair, and why `UNKNOWN` must not block a match with a typed node.
 
+## Real-world check: kg-gen (Stanford), Apple Inc. article
+
+[kg-gen](https://github.com/stair-lab/kg-gen) ships example graphs it extracted from Wikipedia articles
+(`app/examples/*.json`). The largest, *Apple Inc.*, has 1,188 entities and 1,386 relationships from 50 chunks.
+
+| Finding | Evidence |
+|---|---|
+| The company is split | `Apple` holds 456 relationship endpoints, `Apple Inc.` 47, plus `Apple Computer, Inc.`, `Apple Computer Company` and `Apple Computer` |
+| Most of what the graph knows about Jobs is on his surname | `Jobs` 46 endpoints, `Steve Jobs` 19, `Apple co-founder Steve Jobs` 2; likewise `Wozniak` 16 / `Steve Wozniak` 4 |
+| Surnames used alone | `Amelio`, `Gassée`, `Ive`, `Raskin`, `Sculley`, `Spindler`, `Elphicke` each sit apart from the full name |
+| Relationships from a node to itself | 7, such as *iTunes — is — iTunes* and *Apple II — has — Apple II* |
+| 65 disconnected pieces | The largest holds 83% of linked nodes; 66 entities have no relationship |
+
+graphaudit lists 7 certain duplicates (case only), 31 likely pairs (23 singular/plural, 8 legal forms) and
+41 partial names. The partial-name list is noisier in a graph without entity types: by hand, about half are the
+same thing (`JOBS` → `STEVE JOBS`) and half are not (`AMAZON` → `AMAZON ECHO`). kg-gen records one chunk per
+relationship, so the source-support test does not apply.
+
+This graph exposed four more tool errors, now fixed: `APPLE TV` / `APPLE TV+` and `ICLOUD` / `ICLOUD+` were merged
+as certain duplicates (punctuation was stripped), `IPHONE 4` / `IPHONE 4S` and `GROUP A` / `GROUP B` were proposed
+as typos, `SOUTH AMERICAN` / `NORTH AMERICAN` too, and bare years and common nouns (`2020`, `ads`) were proposed as
+partial names.
+
 ## Control: a hand-built Neo4j graph
 
 Neo4j's *Movies* example ([neo4j-graph-examples/movies](https://github.com/neo4j-graph-examples/movies),
 `scripts/movies.cypher`) is curated by hand: 171 nodes, 253 relationships. graphaudit reports 0 duplicates,
 0 likely pairs, 0 partial names, 0 unused or dangling nodes, and one connected piece. The findings above come
 from LLM extraction, not from the checks themselves.
+
+## Same meaning in different words (optional, `--embed`)
+
+Spelling-level checks cannot see that `HENRY TUDOR` is `HENRY VII`. With an embedding server running,
+graphaudit embeds every distinct name and lists pairs above a cosine threshold that no other check already
+proposed. It works with any OpenAI-compatible `/v1/embeddings` endpoint, for example llama.cpp with bge-m3:
+
+```powershell
+llama-server -m bge-m3-Q8_0.gguf --embeddings --port 8081
+graphaudit relationships.csv --nodes entities.csv --embed http://127.0.0.1:8081 --embed-min 0.90 --out audit_embed
+graphaudit relationships.csv --nodes entities.csv --embed http://127.0.0.1:8081 --desc description --out audit_embed_desc
+```
+
+`--desc COL` embeds each name with its description (the converters export one for GraphRAG and LightRAG).
+The same guards apply: `HENRY VI` / `HENRY VII`, `MR.` / `MRS.` and opposites never pair, and typed nodes pair only
+with the same or an `UNKNOWN` type. Embeddings rate related but different things as close, so
+`semantic_duplicates.csv` is a review list, never a merge. The threshold has not been calibrated on a real
+model yet: start at 0.90 and read the list.
 
 ## Run
 
@@ -111,9 +152,9 @@ Columns are detected by name; override with `--src`, `--dst`, `--rel`, `--doc`, 
 Comma, semicolon and tab separators are detected. Multi-valued provenance cells such as
 `d1;d2`, `d1|d2` or `['t1', 't2']` (GraphRAG `text_unit_ids`) are split. Parquet output
 (e.g. GraphRAG) converts with `tools/graphrag_to_csv.py` (needs `pip install pandas pyarrow`); LightRAG's
-`graph_chunk_entity_relation.graphml` with `tools/lightrag_to_csv.py` (standard library only).
+`graph_chunk_entity_relation.graphml` with `tools/lightrag_to_csv.py`, kg-gen JSON with `tools/kggen_to_csv.py` (both standard library only).
 
-Output in `graphaudit_out/` (or `--out`): `report.md`, `duplicates.csv`, `likely_duplicates.csv`, `partial_names.csv`, `edge_support.csv`.
+Output in `graphaudit_out/` (or `--out`): `report.md`, `duplicates.csv`, `likely_duplicates.csv`, `partial_names.csv`, `edge_support.csv`, and `semantic_duplicates.csv` with `--embed`.
 Options: `--undirected` (A → B and B → A are one edge), `--typos S` (edit budget for likely duplicates; 1 = default, 0 = off),
 `--alpha A` (FDR, default 0.05), `--top N`. With fewer than 20 documents the source-support test is reported as not testable.
 
@@ -134,10 +175,10 @@ weighted by popularity, and 10 genuine relations planted in 12 documents each.
 
 ## Limits
 
-- Duplicates with the same meaning in different words ("car" / "automobile") need an
-  embedding model; graphaudit only finds spelling-level duplicates.
+- Duplicates with the same meaning in different words ("car" / "automobile") are only found with `--embed`,
+  and only as a review list.
 - Source support assumes documents are exchangeable; near-duplicate documents (the same text
   ingested twice) inflate support and should be removed first.
 - A significant edge means "stated together more often than chance", not "true".
 
-Std-only Rust, no crates. `cargo test` runs the unit tests. Author: Ernesto Antonio Arias Díaz · MIT
+Std-only Rust, no crates (the embedding client is plain HTTP to a local server). `cargo test` runs the unit tests. Author: Ernesto Antonio Arias Díaz · MIT

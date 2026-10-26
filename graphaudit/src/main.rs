@@ -11,6 +11,9 @@
 
 mod csv;
 mod dedup;
+mod embed;
+mod http;
+mod json;
 mod stats;
 
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -41,6 +44,9 @@ struct Args {
     alpha: f64,
     top: usize,
     out: PathBuf,
+    embed: Option<String>,
+    embed_min: f32,
+    desc: Option<String>,
 }
 
 const HELP: &str = "graphaudit — audit a knowledge graph's own numbers
@@ -61,8 +67,13 @@ USAGE: graphaudit <edges.csv> [options]
   --alpha A          FDR level for source support (default 0.05)
   --top N            rows to show per table (default 15)
   --out DIR          output folder (default graphaudit_out)
+  --embed URL        find same-meaning duplicates with an embedding server, e.g.
+                     http://127.0.0.1:8081 (llama-server -m bge-m3 --embeddings)
+  --embed-min C      cosine similarity to propose a pair (default 0.90)
+  --desc COL         node-table description column to embed with each name (off by default)
 
-Writes DIR/report.md, duplicates.csv, likely_duplicates.csv, partial_names.csv, edge_support.csv.";
+Writes DIR/report.md, duplicates.csv, likely_duplicates.csv, partial_names.csv, edge_support.csv
+(and semantic_duplicates.csv with --embed).";
 
 fn die(m: &str) -> ! {
     eprintln!("graphaudit: {m}");
@@ -85,6 +96,9 @@ fn parse_args() -> Args {
         alpha: 0.05,
         top: 15,
         out: PathBuf::from("graphaudit_out"),
+        embed: None,
+        embed_min: 0.90,
+        desc: None,
     };
     let mut it = env::args().skip(1);
     let mut pos = None;
@@ -104,6 +118,9 @@ fn parse_args() -> Args {
             "--alpha" => a.alpha = v("--alpha").parse().unwrap_or_else(|_| die("bad --alpha")),
             "--top" => a.top = v("--top").parse().unwrap_or_else(|_| die("bad --top")),
             "--out" => a.out = v("--out").into(),
+            "--embed" => a.embed = Some(v("--embed")),
+            "--embed-min" => a.embed_min = v("--embed-min").parse().unwrap_or_else(|_| die("bad --embed-min")),
+            "--desc" => a.desc = Some(v("--desc")),
             "-h" | "--help" => {
                 println!("{HELP}");
                 std::process::exit(0)
@@ -223,12 +240,14 @@ fn main() {
     let mut labels: Vec<String> = Vec::new();
     let mut idx: HashMap<String, usize> = HashMap::new();
     let mut types: Vec<String> = Vec::new();
+    let mut descs: HashMap<usize, String> = HashMap::new();
     let mut declared = 0usize;
     if let Some(np) = &a.nodes {
         let nt = read_table(np);
         let i_id = nt.col(a.nid.as_deref(), NID).unwrap_or_else(|| die(&format!("no id column in node file {:?}; use --id", nt.header)));
         let i_lab = nt.col(a.nlabel.as_deref(), NLABEL).filter(|&i| i != i_id).unwrap_or(i_id);
         let i_typ = nt.col(a.ntype.as_deref(), NTYPE).filter(|&i| i != i_id && i != i_lab);
+        let i_desc = a.desc.as_deref().map(|c| nt.col(Some(c), &[]).unwrap_or_else(|| die(&format!("no column {c} in node file {:?}", nt.header))));
         for r in &nt.rows {
             let id = r.get(i_id).map(|s| s.trim().to_string()).unwrap_or_default();
             if id.is_empty() || idx.contains_key(&id) {
@@ -237,6 +256,9 @@ fn main() {
             idx.insert(id.clone(), ids.len());
             labels.push(r.get(i_lab).map(|l| l.trim().trim_matches('"').to_string()).unwrap_or_else(|| id.clone()));
             types.push(i_typ.and_then(|i| r.get(i)).map(|t| t.trim().trim_matches('"').to_uppercase()).unwrap_or_default());
+            if let Some(d) = i_desc.and_then(|i| r.get(i)) {
+                descs.insert(ids.len(), d.trim().chars().take(400).collect());
+            }
             ids.push(id);
         }
         declared = ids.len();
@@ -301,6 +323,38 @@ fn main() {
     };
     let partial = dedup::partial_names(&reps_of, &d.norm, &labels, &types, typed);
     let linked: HashSet<(usize, usize)> = edges.iter().map(|e| (g(e.u).min(g(e.v)), g(e.u).max(g(e.v)))).collect();
+
+    // same meaning in different words, through embeddings (optional)
+    let semantic: Vec<(usize, usize, f32)> = match &a.embed {
+        None => Vec::new(),
+        Some(url) => {
+            let texts: Vec<String> = reps_of
+                .iter()
+                .map(|&i| match descs.get(&i) {
+                    Some(d) if !d.is_empty() => format!("{}: {}", labels[i], d),
+                    _ => labels[i].clone(),
+                })
+                .collect();
+            let vecs = embed::embed_texts(url, &texts).unwrap_or_else(|e| die(&e));
+            let mut known: HashSet<(usize, usize)> = HashSet::new();
+            for &(x, y, _, _) in &d.likely {
+                known.insert((g(x).min(g(y)), g(x).max(g(y))));
+            }
+            for &(x, y) in &partial {
+                known.insert((g(x).min(g(y)), g(x).max(g(y))));
+            }
+            let vague = |t: &str| t.is_empty() || matches!(t.to_lowercase().as_str(), "unknown" | "other" | "none" | "null");
+            embed::similar_pairs(&vecs, a.embed_min, |p, q| {
+                let (x, y) = (reps_of[p], reps_of[q]);
+                (!typed || vague(&types[x]) || vague(&types[y]) || types[x] == types[y])
+                    && !known.contains(&(g(x).min(g(y)), g(x).max(g(y))))
+                    && dedup::names_may_match(&d.norm[x], &d.norm[y])
+            })
+            .into_iter()
+            .map(|(p, q, c)| (reps_of[p], reps_of[q], c))
+            .collect()
+        }
+    };
 
     // ---- 2. edge inflation
     let raw_keys: HashSet<(usize, usize, &str)> =
@@ -443,6 +497,13 @@ fn main() {
         s += &format!("{},{},{},{}\n", csv_cell(&labels[x]), csv_cell(&labels[y]), csv_cell(&types[x]), linked.contains(&(g(x).min(g(y)), g(x).max(g(y)))));
     }
     fs::write(a.out.join("partial_names.csv"), s).unwrap();
+    if a.embed.is_some() {
+        let mut s = String::from("label_a,label_b,cosine,type_a,type_b,linked_by_an_edge\n");
+        for &(x, y, c) in &semantic {
+            s += &format!("{},{},{:.3},{},{},{}\n", csv_cell(&labels[x]), csv_cell(&labels[y]), c, csv_cell(&types[x]), csv_cell(&types[y]), linked.contains(&(g(x).min(g(y)), g(x).max(g(y)))));
+        }
+        fs::write(a.out.join("semantic_duplicates.csv"), s).unwrap();
+    }
     let few_docs = has_docs && n_docs < 20;
     let rep = |grp: usize| -> &str {
         let i = (0..n_nodes).find(|&i| g(i) == grp).unwrap();
@@ -532,7 +593,19 @@ fn main() {
         }
         p(&mut r, String::new());
     }
-    p(&mut r, "Same meaning in different words (\"car\" / \"automobile\") is not detected here: that needs an embedding model.\n".into());
+    if a.embed.is_some() {
+        p(&mut r, format!("**{} possible same-meaning duplicates** (embedding cosine ≥ {:.2}{}, not already listed above; numbers, honorifics, opposites and types are guarded as above). Embeddings also rate related but different things as close (two kings, a city and its county): this list is for review, never for merging.\n",
+            semantic.len(), a.embed_min, if descs.is_empty() { ", names only" } else { ", names with descriptions" }));
+        if !semantic.is_empty() {
+            p(&mut r, "| Label A | Label B | Cosine |\n|---|---|---|".into());
+            for &(x, y, c) in semantic.iter().take(a.top) {
+                p(&mut r, format!("| {} | {} | {:.3} |", md(&labels[x]), md(&labels[y]), c));
+            }
+            p(&mut r, String::new());
+        }
+    } else {
+        p(&mut r, "Same meaning in different words (\"car\" / \"automobile\") is not detected here: rerun with `--embed URL` and an embedding server.\n".into());
+    }
 
     p(&mut r, "## 2. Edge inflation\n".into());
     p(&mut r, format!("{} edge rows hold {} distinct edges; merging duplicate nodes leaves **{}**. {} edges became self-loops (a node linked to a copy of itself){}.\n",
@@ -603,7 +676,7 @@ fn main() {
         p(&mut r, format!("- Nodes declared but never used in an edge: {} · edge endpoints missing from the node table: {}{}.", isolated, dangling.len(),
             if dl.is_empty() { String::new() } else { format!(" ({})", dl.iter().take(10).map(|x| format!("`{}`", md(x))).collect::<Vec<_>>().join(", ")) }));
     }
-    p(&mut r, "\nFiles: `duplicates.csv`, `likely_duplicates.csv`, `partial_names.csv`, `edge_support.csv`.".into());
+    p(&mut r, format!("\nFiles: `duplicates.csv`, `likely_duplicates.csv`, `partial_names.csv`, `edge_support.csv`{}.", if a.embed.is_some() { ", `semantic_duplicates.csv`" } else { "" }));
 
     fs::write(a.out.join("report.md"), &r).unwrap();
     let mut by_kind: BTreeMap<&str, String> = BTreeMap::new();

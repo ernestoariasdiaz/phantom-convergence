@@ -65,6 +65,8 @@ def main():
     for c in ("id", "type", "frequency", "degree"):
         if c in ent.columns:
             e[c] = ent[c]
+    if "description" in ent.columns:
+        e["description"] = ent["description"].astype(str).str.slice(0, 400)
     if "text_unit_ids" in ent.columns:
         e["text_unit_ids"] = ent["text_unit_ids"].map(lambda v: ";".join(as_list(v)))
     e.to_csv(out / "entities.csv", index=False)

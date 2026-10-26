@@ -46,7 +46,8 @@ const HONORIFICS: &[&str] = &["mr", "mrs", "ms", "miss", "dr", "sir", "lady", "l
 /// Case, accents, punctuation, leading articles. Plurals are kept: they decide nothing alone.
 pub fn normalize(label: &str) -> String {
     let lower: String = label.to_lowercase().chars().map(fold_char).collect();
-    let cleaned: String = lower.chars().map(|c| if c.is_alphanumeric() { c } else { ' ' }).collect();
+    // '+' and '#' name different things: "Apple TV" / "Apple TV+", "C" / "C#" / "C++"
+    let cleaned: String = lower.chars().map(|c| if c.is_alphanumeric() || c == '+' || c == '#' { c } else { ' ' }).collect();
     let mut toks: Vec<String> = cleaned.split_whitespace().map(|w| w.to_string()).collect();
     while toks.len() > 1 && ARTICLES.contains(&toks[0].as_str()) {
         toks.remove(0);
@@ -88,6 +89,14 @@ fn negation_pair(a: &str, b: &str) -> bool {
         })
 }
 
+/// Guards for same-meaning proposals: numbers and model markers may be missing on one side
+/// ("HENRY TUDOR" / "HENRY VII") but never different on both ("HENRY VI" / "HENRY VII");
+/// same honorifics; not opposites.
+pub fn names_may_match(a_norm: &str, b_norm: &str) -> bool {
+    let (da, db) = (digits(a_norm), digits(b_norm));
+    (da == db || da.is_empty() || db.is_empty()) && !honorific_differs(a_norm, b_norm) && !negation_pair(a_norm, b_norm)
+}
+
 fn possessive(raw: &str) -> bool {
     let l = raw.to_lowercase();
     l.contains("'s ") || l.contains("’s ") || l.ends_with("'s") || l.ends_with("’s") || l.contains("s' ")
@@ -99,10 +108,16 @@ fn roman(w: &str) -> bool {
     (0..4).any(|t| ONES.iter().any(|o| !(t == 0 && o.is_empty()) && w == format!("{}{}", "x".repeat(t), o)))
 }
 
-/// Numbers in a name, Arabic and Roman: "GPT-3" / "GPT-4" and "HENRY VI" / "HENRY VII" never pair.
+/// Numbers and model markers in a name: tokens with a digit, '+' or '#', and Roman numerals.
+/// Single letters too ("GROUP A" / "GROUP B").
+/// "GPT-3" / "GPT-4", "HENRY VI" / "HENRY VII", "IPHONE 4" / "IPHONE 4S", "ICLOUD" / "ICLOUD+" never pair.
 fn digits(s: &str) -> String {
-    let mut out: Vec<String> = s.split(|c: char| !c.is_ascii_digit()).filter(|x| !x.is_empty()).map(String::from).collect();
-    out.extend(s.split(' ').filter(|w| roman(w)).map(|w| format!("r{w}")));
+    let mut out: Vec<String> = s
+        .split(' ')
+        .filter(|w| w.chars().any(|c| c.is_ascii_digit() || c == '+' || c == '#') || roman(w) || w.chars().count() == 1)
+        .map(String::from)
+        .collect();
+    out.sort();
     out.join(",")
 }
 
@@ -157,7 +172,11 @@ pub fn partial_names(reps: &[usize], norm: &[String], raw: &[String], types: &[S
     for (a, ta) in toks.iter().enumerate() {
         // only single words used alone (a surname, a first name, a bare place name):
         // longer short names collide with qualifiers like "PANEL (IN DULCE BASE)"
-        if ta.len() != 1 || ta[0].chars().count() < 3 {
+        if ta.len() != 1 || ta[0].chars().count() < 3 || ta[0].chars().all(|c| c.is_ascii_digit()) {
+            continue;
+        }
+        // a name, not a common noun: "Jobs", "CRUZ" yes; "ads", "business" no
+        if !raw[reps[a]].trim().chars().next().map_or(false, |c| c.is_uppercase()) {
             continue;
         }
         let mut hits = Vec::new();
@@ -175,6 +194,17 @@ pub fn partial_names(reps: &[usize], norm: &[String], raw: &[String], types: &[S
             }
             if tb[..ta.len()] == ta[..] || tb[tb.len() - ta.len()..] == ta[..] {
                 hits.push(b);
+            }
+        }
+        // "JOBS" -> "STEVE JOBS" and "APPLE CO-FOUNDER STEVE JOBS": if every longer
+        // name contains the shortest one, they are one name with more qualifiers
+        if hits.len() > 1 {
+            hits.sort_by_key(|&b| toks[b].len());
+            let base = &toks[hits[0]];
+            let nested = hits[1..].iter().all(|&b| toks[b].windows(base.len()).any(|w| w == &base[..]))
+                && hits[1..].iter().all(|&b| toks[b].len() > base.len());
+            if nested {
+                hits.truncate(1);
             }
         }
         if hits.len() == 1 {
@@ -281,6 +311,25 @@ pub fn dedup(labels: &[String], types: &[String], strictness: f64) -> DedupResul
             }
         }
     }
+    // a company with and without its legal form: "APPLE" / "APPLE INC."
+    const LEGAL: &[&str] = &["inc", "incorporated", "corp", "corporation", "ltd", "limited", "llc", "plc", "gmbh", "ag", "sa", "srl", "co", "company"];
+    let by_norm0: HashMap<&str, Vec<usize>> = reps.iter().fold(HashMap::new(), |mut m, &r| {
+        m.entry(norm[r].as_str()).or_insert_with(Vec::new).push(r);
+        m
+    });
+    for &r in &reps {
+        let toks: Vec<&str> = norm[r].split(' ').collect();
+        // "Fortune 500 company" is a description, not a legal name: the form must be capitalised
+        let last_raw = labels[r].split(|c: char| !c.is_alphanumeric()).filter(|w| !w.is_empty()).last().unwrap_or("");
+        if toks.len() >= 2 && LEGAL.contains(toks.last().unwrap()) && last_raw.chars().next().map_or(false, |c| c.is_uppercase()) {
+            let rest = toks[..toks.len() - 1].join(" ");
+            for &o in by_norm0.get(rest.as_str()).map(|v| v.as_slice()).unwrap_or(&[]) {
+                if o != r && type_compatible(ty(r), ty(o)) {
+                    likely.push((o, r, 1.0, "legal form"));
+                }
+            }
+        }
+    }
     // a leading title: "KING EDWARD IV" / "EDWARD IV"
     let by_norm: HashMap<&str, Vec<usize>> = reps.iter().fold(HashMap::new(), |mut m, &r| {
         m.entry(norm[r].as_str()).or_insert_with(Vec::new).push(r);
@@ -338,6 +387,14 @@ pub fn dedup(labels: &[String], types: &[String], strictness: f64) -> DedupResul
                 if budget == 0 {
                     continue;
                 }
+                // word by word: a typo changes a word a little, not into another word
+                // ("SOUTH AMERICAN" / "NORTH AMERICAN" is two edits in a five-letter word)
+                let (wa, wb): (Vec<&str>, Vec<&str>) = (a.split(' ').collect(), b.split(' ').collect());
+                if wa.len() == wb.len()
+                    && wa.iter().zip(&wb).any(|(x, y)| x != y && levenshtein(x, y, 2) > if x.chars().count().max(y.chars().count()) <= 7 { 1 } else { 2 })
+                {
+                    continue;
+                }
                 let dist = levenshtein(a, b, budget);
                 if dist <= budget {
                     likely.push((reps[g], reps[h], 1.0 - dist as f64 / la.max(lb) as f64, "typo"));
@@ -377,7 +434,7 @@ mod tests {
         assert!(!p.iter().any(|&(a, _)| a == 5)); // untyped ELEVATOR vs EVENT: no
         let untyped = vec![String::new(); labels.len()];
         let q = partial_names(&reps, &norm, &raw, &untyped, false);
-        assert!(!q.iter().any(|&(a, _)| a == 2)); // BASE is ambiguous without types
+        assert!(q.contains(&(2, 3))); // untyped: MISSION TO DULCE BASE contains DULCE BASE, so one name
         let l2 = ["CAROLINE", "CAROLINE'S HUSBAND", "BOB", "BOB CRATCHIT"];
         let n2: Vec<String> = l2.iter().map(|l| normalize(l)).collect();
         let r2: Vec<String> = l2.iter().map(|s| s.to_string()).collect();
@@ -413,6 +470,34 @@ mod tests {
         assert!(roman("vii") && roman("xiv") && !roman("civil") && !roman("mix") && roman("x"));
         assert!(p.contains(&(7, 8)));
         assert!(!p.iter().any(|&(a, _)| a == 4)); // Henry: VI, VII -> ambiguous
+    }
+
+    #[test]
+    fn plus_legal_form_and_nested_names() {
+        assert_ne!(normalize("Apple TV+"), normalize("Apple TV"));
+        assert_ne!(normalize("C#"), normalize("C++"));
+        let l: Vec<String> = ["Apple", "Apple Inc.", "Jobs", "Steve Jobs", "Apple co-founder Steve Jobs", "ads", "Power Mac ads", "2020", "September 2020"]
+            .iter().map(|s| s.to_string()).collect();
+        let t = vec![String::new(); l.len()];
+        let r = dedup(&l, &t, 1.0);
+        assert!(r.likely.iter().any(|&(a, b, _, w)| (a.min(b), a.max(b)) == (0, 1) && w == "legal form"));
+        let reps: Vec<usize> = (0..l.len()).collect();
+        let p = partial_names(&reps, &r.norm, &l, &t, false);
+        assert!(p.contains(&(2, 3)));                 // Jobs -> Steve Jobs
+        let l3: Vec<String> = ["iPhone 4", "iPhone 4s", "iCloud", "iCloud+", "Fortune 500", "Fortune 500 company"].iter().map(|s| s.to_string()).collect();
+        let r3 = dedup(&l3, &vec![String::new(); 6], 1.0);
+        assert!(r3.likely.is_empty(), "{:?}", r3.likely);
+        let l4: Vec<String> = ["Group A", "Group B", "South American teams", "North American teams", "trust state", "trust stte"].iter().map(|s| s.to_string()).collect();
+        let r4 = dedup(&l4, &vec![String::new(); 6], 1.0);
+        assert_eq!(r4.likely.iter().map(|&(a, b, _, _)| (a.min(b), a.max(b))).collect::<Vec<_>>(), vec![(4, 5)]);
+        assert!(!p.iter().any(|&(a, _)| a == 5 || a == 7)); // common noun, bare year
+    }
+
+    #[test]
+    fn semantic_guards() {
+        assert!(names_may_match(&normalize("Henry Tudor"), &normalize("Henry VII")));
+        assert!(!names_may_match(&normalize("Henry VI"), &normalize("Henry VII")));
+        assert!(!names_may_match(&normalize("Mr. Fezziwig"), &normalize("Mrs. Fezziwig")));
     }
 
     #[test]

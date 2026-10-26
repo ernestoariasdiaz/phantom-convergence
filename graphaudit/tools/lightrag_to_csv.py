@@ -40,11 +40,12 @@ def main():
     n = e = 0
     with open(out / "entities.csv", "w", newline="", encoding="utf-8") as f:
         w = csv.writer(f)
-        w.writerow(["title", "type", "source_id", "file_path"])
+        w.writerow(["title", "type", "source_id", "file_path", "description"])
         for node in graph.iter(NS + "node"):
             a = attrs(node)
             w.writerow([a.get("entity_id", node.get("id")), a.get("entity_type", ""),
-                        chunks(a.get("source_id", "")), a.get("file_path", "")])
+                        chunks(a.get("source_id", "")), a.get("file_path", ""),
+                        a.get("description", "").replace("<SEP>", " ")[:400]])
             n += 1
     with open(out / "relationships.csv", "w", newline="", encoding="utf-8") as f:
         w = csv.writer(f)
