@@ -150,6 +150,27 @@ order of reliability: spelling, partial names, embeddings, shared words, nearest
 work: `CATAREY`, `ETAPA` and `TEXAS` pairs were gone and `FRANCA` / `ZONA FRANCA` became uncertain; `IESBA` / its code
 of ethics was still judged SAME.
 
+**Later checks on the same graph.** v1.13's prompt-example check flags `EL AURELIA`, `TIRUZIA`, `ALHAMIA PRISON` and
+`URBANIZACIÓN ALHAMIA PRISON`; none of the 1,143 text units mentions Aurelia, Tiruzia or Alhamia (checked with
+`tools/boilerplate.py --find`). The model copied GraphRAG's prompt example into a banking graph too, and in one case
+turned the example's prison into a residential neighbourhood next to the real ones in the province tables.
+
+**Letterheads, without re-indexing** (`tools/boilerplate.py`: lines repeated in at least 5% of text units count as
+boilerplate; a source is dropped when the pair only meets inside those lines):
+
+| Edge | With letterheads | Without |
+|---|---|---|
+| `SANTO DOMINGO — REPÚBLICA DOMINICANA` | 161 units, beyond chance (the strongest) | 15 units, within chance |
+| `SANTO DOMINGO — SUPERDEBANCOSRD` | 114, beyond chance | gone from the top |
+| `SANTO DOMINGO — AV. MÉXICO #52` | 58, beyond chance | gone from the top |
+| `TARJETAHABIENTE TITULAR — ENTIDAD EMISORA DE TARJETAS DE CRÉDITO` | not in the top | 11 units against 1.2 expected: the strongest content edge |
+
+1,830 sources are dropped and 517 relationships keep none: they were only ever seen inside the letterhead. Edges
+beyond chance fall from 75 to 68. Some letterhead survives: `SANTO DOMINGO — SUPERDEBANCOS RD` (20 against 3.5) and
+`SANTO DOMINGO — LEOPOLDO NAVARRO` (14 against 2.8) still beat chance, because OCR wrote those lines differently on
+different pages (`LEOPOIDO`), so they do not repeat exactly. Re-indexing without the letterhead could also change
+what gets extracted; that is untested.
+
 ## Blind test 2: ai-knowledge-graph's five samples
 
 [ai-knowledge-graph](https://github.com/robert-mcdermott/ai-knowledge-graph) ships five example graphs with their
@@ -358,7 +379,7 @@ Columns are detected by name; override with `--src`, `--dst`, `--rel`, `--doc`, 
 Comma, semicolon and tab separators are detected. Multi-valued provenance cells such as
 `d1;d2`, `d1|d2` or `['t1', 't2']` (GraphRAG `text_unit_ids`) are split. Parquet output
 (e.g. GraphRAG) converts with `tools/graphrag_to_csv.py` (needs `pip install pandas pyarrow`); LightRAG's
-`graph_chunk_entity_relation.graphml` with `tools/lightrag_to_csv.py`, kg-gen JSON with `tools/kggen_to_csv.py`, ai-knowledge-graph JSON with `tools/akg_to_csv.py` (all standard library only); itext2kg snapshots with `tools/itext2kg_to_csv.py` (restricted unpickler, needs numpy).
+`graph_chunk_entity_relation.graphml` with `tools/lightrag_to_csv.py`, kg-gen JSON with `tools/kggen_to_csv.py`, ai-knowledge-graph JSON with `tools/akg_to_csv.py` (all standard library only); itext2kg snapshots with `tools/itext2kg_to_csv.py` (restricted unpickler, needs numpy). `tools/boilerplate.py` finds lines repeated across a GraphRAG index's text units (letterheads, footers) and drops the sources where a pair only meets inside them, without re-indexing; `--find WORD` prints the text units that mention a word.
 
 Output in `graphaudit_out/` (or `--out`): `report.md`, `duplicates.csv`, `likely_duplicates.csv`, `partial_names.csv`, `edge_support.csv`, and `semantic_duplicates.csv` with `--embed`.
 Options: `--undirected` (A → B and B → A are one edge), `--typos S` (edit budget for likely duplicates; 1 = default, 0 = off),
