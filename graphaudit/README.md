@@ -166,10 +166,21 @@ graphaudit relationships.csv --nodes entities.csv --desc description --judge htt
 | Known person duplicates | 7 | 3 same (`EDWARD IV` / `KING EDWARD IV`, `EDWARD` / `KING EDWARD IV`, `WARWICK` / `RICHARD NEVILLE, EARL OF WARWICK`), 3 uncertain (`EDWARD` / `EDWARD IV`, `MARGARET` / `MARGARET OF ANJOU`, `HENRY TUDOR` / `HENRY VII`), 1 different (`HENRY` / `HENRY VI`: "a generic name") |
 | All candidates | 110 | 11 same: 9 right (the 3 above, 4 singular/plural pairs, `DIABETES` / `DIABETES MELLITUS`, `RICHARD, DUKE OF YORK` / `DUKE OF YORK`), 1 arguable (`ANGLO-AMERICAN LAW` / `ANGLO-AMERICAN SYSTEMS`), 1 wrong (`HOUSE OF LANCASTER` / `HOUSE OF YORK`: "rival factions"); 10 uncertain; 89 different, including `HENRY VI` / `HENRY TUDOR`, every pair of battles, insulin types and tenancies |
 
-Compared with embeddings on the same graph (1 duplicate found, ranked below gold / silver), a small model reading
-descriptions separates "same" from "related" far better, but misses half the duplicates. `HENRY TUDOR` / `HENRY VII`
-failed because the graph's own description of `HENRY VII` is a sentence about someone marrying him; the model read
-it as a different person. A larger model may do better; that is untested.
+**Same graph, Qwen3-4B-Instruct-2507 (Q4_K_M, fits in 4 GB of VRAM):**
+
+| | Pairs | Verdicts |
+|---|---|---|
+| Known person duplicates | 7 | 6 same, including `HENRY TUDOR` / `HENRY VII` and `MARGARET` / `MARGARET OF ANJOU`; 1 uncertain (`HENRY` / `HENRY VI`, whose reason is right: "Henry refers to Henry VI") |
+| Named people, houses, battles that are different | – | 0 wrong: `HOUSE OF LANCASTER` / `HOUSE OF YORK`, `HENRY VI` / `HENRY TUDOR` and every pair of battles judged different |
+| All candidates | 110 | 23 same: 13 right, 2 arguable, 8 wrong, all abstract legal concepts merged with a broader or narrower one (`LANDLORD-TENANT LAW` / `…RELATIONSHIP`, `ANGLO-AMERICAN LAW` / `ANGLO-AMERICAN PROPERTY LAW`, `POSSESSORY ACTIONS` / `STATUTORY POSSESSORY ACTION`) |
+
+Several of the 8 wrong verdicts give a reason that contradicts them ("Property law is a subset of Anglo-American
+law"). So: a 4B model judges named entities (people, organisations, events) well and over-merges general and
+specific concepts. Compared with embeddings on the same graph (1 duplicate found, ranked below gold / silver),
+both models separate "same" from "related" far better.
+
+Gemma 4 E2B missed `HENRY TUDOR` / `HENRY VII` because the graph's own description of `HENRY VII` is a sentence about
+someone marrying him; Qwen read the same description correctly.
 
 Output: `judged_pairs.csv` with every candidate, the verdict (same / different / uncertain when the two orders
 disagree) and the model's reason. A model can be wrong; the list is for review before merging.
