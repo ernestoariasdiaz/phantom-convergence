@@ -114,7 +114,7 @@ Neo4j's *Movies* example ([neo4j-graph-examples/movies](https://github.com/neo4j
 0 likely pairs, 0 partial names, 0 unused or dangling nodes, and one connected piece. The findings above come
 from LLM extraction, not from the checks themselves.
 
-## Same meaning in different words (optional, `--embed`)
+## Same meaning in different words (experimental, `--embed`)
 
 Spelling-level checks cannot see that `HENRY TUDOR` is `HENRY VII`. With an embedding server running,
 graphaudit embeds every distinct name and lists pairs above a cosine threshold that no other check already
@@ -122,15 +122,26 @@ proposed. It works with any OpenAI-compatible `/v1/embeddings` endpoint, for exa
 
 ```powershell
 llama-server -m bge-m3-Q8_0.gguf --embeddings --port 8081
-graphaudit relationships.csv --nodes entities.csv --embed http://127.0.0.1:8081 --embed-min 0.90 --out audit_embed
+graphaudit relationships.csv --nodes entities.csv --embed http://127.0.0.1:8081 --out audit_embed
 graphaudit relationships.csv --nodes entities.csv --embed http://127.0.0.1:8081 --desc description --out audit_embed_desc
 ```
 
 `--desc COL` embeds each name with its description (the converters export one for GraphRAG and LightRAG).
-The same guards apply: `HENRY VI` / `HENRY VII`, `MR.` / `MRS.` and opposites never pair, and typed nodes pair only
-with the same or an `UNKNOWN` type. Embeddings rate related but different things as close, so
-`semantic_duplicates.csv` is a review list, never a merge. The threshold has not been calibrated on a real
-model yet: start at 0.90 and read the list.
+The same guards apply: `HENRY VI` / `HENRY VII`, `MR.` / `MRS.` and opposites never pair, and typed nodes pair
+only with the same or an `UNKNOWN` type.
+
+**Result on the Wars of the Roses graph with bge-m3 (Q8_0): embeddings do not separate "the same entity" from
+"a related entity".**
+
+| Input | Pairs at cosine ≥ 0.80 | Genuine duplicates among them | Known duplicates missed |
+|---|---|---|---|
+| Names only | 25 | 0 (`BURGLARY` / `ROBBERY`, `BEEF` / `PORK INSULIN`, `BATTLE OF ST. ALBANS` / `SECOND BATTLE…`) | `EDWARD` / `EDWARD IV`, `HENRY TUDOR` / `HENRY VII` |
+| Names + descriptions | 37 | `EDWARD` / `EDWARD IV` (0.823), and arguably `CIVIL LAW` / `CIVIL-LAW SYSTEM` and `ANGLO-AMERICAN LAW` / `…SYSTEM` | `HENRY TUDOR` / `HENRY VII`, although its description says *"later known as Henry VII"* |
+
+The one clear duplicate ranks below `GOLD` / `SILVER` (0.886), `HOUSE OF LANCASTER` / `HOUSE OF YORK` and
+`DEBTOR` / `CREDITOR`, so no threshold keeps it and drops those. At the default 0.90 both runs return nothing.
+`semantic_duplicates.csv` is a list for a human to skim, never a merge; finding same-meaning duplicates reliably
+needs more than cosine similarity (for example, reading the descriptions with an LLM and asking).
 
 ## Run
 
@@ -175,8 +186,8 @@ weighted by popularity, and 10 genuine relations planted in 12 documents each.
 
 ## Limits
 
-- Duplicates with the same meaning in different words ("car" / "automobile") are only found with `--embed`,
-  and only as a review list.
+- Duplicates with the same meaning in different words ("car" / "automobile") are not found reliably: `--embed`
+  ranks related things (gold / silver) above true duplicates on a real graph.
 - Source support assumes documents are exchangeable; near-duplicate documents (the same text
   ingested twice) inflate support and should be removed first.
 - A significant edge means "stated together more often than chance", not "true".

@@ -67,7 +67,7 @@ USAGE: graphaudit <edges.csv> [options]
   --alpha A          FDR level for source support (default 0.05)
   --top N            rows to show per table (default 15)
   --out DIR          output folder (default graphaudit_out)
-  --embed URL        find same-meaning duplicates with an embedding server, e.g.
+  --embed URL        experimental: list same-meaning candidates with an embedding server, e.g.
                      http://127.0.0.1:8081 (llama-server -m bge-m3 --embeddings)
   --embed-min C      cosine similarity to propose a pair (default 0.90)
   --desc COL         node-table description column to embed with each name (off by default)
@@ -594,7 +594,7 @@ fn main() {
         p(&mut r, String::new());
     }
     if a.embed.is_some() {
-        p(&mut r, format!("**{} possible same-meaning duplicates** (embedding cosine ≥ {:.2}{}, not already listed above; numbers, honorifics, opposites and types are guarded as above). Embeddings also rate related but different things as close (two kings, a city and its county): this list is for review, never for merging.\n",
+        p(&mut r, format!("**{} possible same-meaning duplicates** (embedding cosine ≥ {:.2}{}, not already listed above; numbers, honorifics, opposites and types are guarded as above). Experimental: on a real graph with bge-m3, related but different things (gold / silver, two royal houses) scored above true duplicates. Skim this list; never merge from it.\n",
             semantic.len(), a.embed_min, if descs.is_empty() { ", names only" } else { ", names with descriptions" }));
         if !semantic.is_empty() {
             p(&mut r, "| Label A | Label B | Cosine |\n|---|---|---|".into());
