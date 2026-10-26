@@ -730,6 +730,25 @@ fn main() {
             if in_cycles == 0 && both == 0 { " · **acyclic by construction**" } else if reciprocal > 0 && in_cycles > 0 { " (two-way duplicate pairs count as cycles)" } else { "" }));
     }
 
+    // names from the worked examples in GraphRAG's default extraction prompt (a made-up hostage story and
+    // a made-up central bank). A model that copies the example into its answer puts these into the graph
+    // although the source text never mentions them (seen with GLM-4-9B on A Christmas Carol).
+    const PROMPT_EXAMPLES: &[&str] = &["firuzabad", "aurelia", "aurelian", "aurelians", "quintara", "tiruzia", "krohaara",
+        "cashion", "namara", "tazbah", "bataglani", "alhamia", "verdantis", "firuzi"];
+    let leaked: Vec<usize> = (0..n_nodes)
+        .filter(|&i| d.norm[i].split(' ').any(|w| PROMPT_EXAMPLES.contains(&w)))
+        .collect();
+    if !leaked.is_empty() {
+        p(&mut r, format!("**{} entities carry names from the worked example in GraphRAG's default extraction prompt** (a made-up story about Aurelia, Firuzabad and Quintara): {}. Unless the source text really mentions them, the model copied the prompt's example into the graph. Check against the source.\n",
+            leaked.len(), leaked.iter().take(10).map(|&i| format!("`{}`", md(&labels[i]))).collect::<Vec<_>>().join(", ")));
+    }
+    if typed {
+        let untyped: Vec<usize> = (0..declared.min(n_nodes)).filter(|&i| types[i].is_empty()).collect();
+        if !untyped.is_empty() {
+            p(&mut r, format!("**{} entities have no type** in a graph that otherwise has types: {}.\n", untyped.len(),
+                untyped.iter().take(8).map(|&i| format!("`{}`", md(&labels[i]))).collect::<Vec<_>>().join(", ")));
+        }
+    }
     // extraction errors in the type column: the type is the entity's own name ("SUCHIR BALAJI" typed
     // "SUCHIR_BALAJI") or the name is a type word ("PERSON" typed "BRET_TAYLOR")
     if typed {

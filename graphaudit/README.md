@@ -226,6 +226,22 @@ graphaudit v1.11.0, run unchanged, proposed `BOB CRATCHIT` / `BOY CRATCHIT` as a
 `LORD` / `LORD MAYOR` as a partial name. Fixed in v1.12: a change confined to words of three letters or fewer is never
 a typo, and a title or honorific alone is never proposed as a short name. Every earlier graph gives the same counts.
 
+## Blind test 5: a third index of the same book, and the prompt's example inside the graph
+
+[GraphRAG_Learning](https://github.com/ThomasAnderson-alt/GraphRAG_Learning) commits a full GraphRAG index of
+*A Christmas Carol* with its settings: GLM-4-9B for extraction, 2,000-token chunks. 166 entities, 196 relationships.
+
+| Finding | Evidence |
+|---|---|
+| Entities that are not in the book | `FIRUZABAD`, `AURELIA`, `CASHION`, `QUINTARA`, with descriptions ("the capital city of Aurelia, where the hostages were welcomed"). None of these words occurs in the book; they come from the worked example in GraphRAG's default extraction prompt, a made-up hostage story, which the model copied into its answer |
+| The protagonist has no type | `SCROOGE` and 17 other entities have an empty type |
+| Three indexes, little agreement | Across the Microsoft, Neo4j and GLM indexes there are 642 distinct entities; 78 are in all three, 39 of them people |
+
+The Microsoft and Neo4j indexes contain no example names. graphaudit v1.12.0 could not have seen this; v1.13 flags
+entities named after the worked example in GraphRAG's default extraction prompt (Aurelia, Firuzabad, Quintara,
+Tiruzia, Krohaara, Cashion, Namara, Tazbah, Bataglani, Alhamia, Verdantis) and counts entities with no type in a
+typed graph. The example list only covers GraphRAG's default prompt; a custom prompt has its own examples to check.
+
 ## Control: a hand-built Neo4j graph
 
 Neo4j's *Movies* example ([neo4j-graph-examples/movies](https://github.com/neo4j-graph-examples/movies),
