@@ -185,11 +185,23 @@ abstract types. Rerun with Qwen3-4B on the same graph: 23 pairs judged, 8 SAME, 
 A SAME whose own reason describes a hierarchy ("a type of", "a subset of") is now counted as uncertain; on the same
 answers that rule alone would have caught only 2 of the 8, so it is a backstop, not the fix.
 
+**A Christmas Carol, Qwen3-4B, with `--embed` for candidates (397 pairs judged): harder.** 58 SAME verdicts:
+33 right by reading the book (`BOB` / `BOB CRATCHIT`, `TIM CRATCHIT` / `TINY TIM`, all five Marley nodes,
+`THE RED-FACED GENTLEMAN` / `THE GENTLEMAN WITH THE EXCRESCENCE ON HIS NOSE`, `THE SHOPKEEPER` / `OLD JOE`…), 11 arguable,
+14 wrong. The traps held where names give it away (`CAROLINE` / `CAROLINE'S HUSBAND`, `THE BOYS` / `THE BOY` different),
+but generic nodes fooled it: `THE GHOST` was judged the same as Marley, the Ghost of Christmas Past and the Ghost of
+the Future. Merged transitively, those verdicts would fuse Marley with two of the three spirits into one node.
+
+That failure has a signature: `THE GHOST` was SAME as two nodes the model itself judged DIFFERENT from each other.
+Since v1.8 such a node's SAME verdicts all become uncertain. On these answers that removes 12 verdicts (7 wrong,
+5 arguable, 0 right), leaving 33 right, 6 arguable and 7 wrong. The Ghost of Christmas Yet to Come is only partly
+found (`GHOST OF THE FUTURE` / `THE PHANTOM`): the candidate step never paired its other names.
+
 Gemma 4 E2B missed `HENRY TUDOR` / `HENRY VII` because the graph's own description of `HENRY VII` is a sentence about
 someone marrying him; Qwen read the same description correctly.
 
 Output: `judged_pairs.csv` with every candidate, the verdict (same / different / uncertain when the two orders
-disagree) and the model's reason. A model can be wrong; the list is for review before merging.
+disagree) and the model's reason. A model can be wrong; the list is for review before merging, and verdicts must never be merged transitively.
 
 ## Run
 

@@ -376,6 +376,8 @@ fn main() {
     // an instruction model reads candidate pairs and says whether they are the same entity (optional)
     let mut judged: Vec<(usize, usize, &'static str, judge::Verdict, String)> = Vec::new();
     let mut judge_skipped = 0usize;
+    let mut judge_conflicts = 0usize;
+    let rep_label = |grp: usize| -> String { (0..n_nodes).find(|&i| g(i) == grp).map(|i| labels[i].clone()).unwrap_or_default() };
     if let Some(url) = &a.judge {
         if descs.is_empty() {
             eprintln!("graphaudit: --judge without --desc: the model sees names and types only");
@@ -443,6 +445,37 @@ fn main() {
             judged.push((x, y, why, v, reason));
         }
         judge_skipped = skipped_abstract;
+        // a node judged SAME as two nodes that were judged DIFFERENT from each other cannot be both:
+        // it is a generic node standing for several entities ("THE GHOST" = Marley, Past, Future).
+        // Its SAME verdicts become uncertain, so they cannot chain different entities together.
+        let key = |x: usize, y: usize| (g(x).min(g(y)), g(x).max(g(y)));
+        let verdict: HashMap<(usize, usize), judge::Verdict> = judged.iter().map(|j| (key(j.0, j.1), j.3)).collect();
+        let mut partners: HashMap<usize, Vec<usize>> = HashMap::new();
+        for j in judged.iter().filter(|j| j.3 == judge::Verdict::Same) {
+            partners.entry(g(j.0)).or_default().push(g(j.1));
+            partners.entry(g(j.1)).or_default().push(g(j.0));
+        }
+        let mut ambiguous: HashMap<usize, (usize, usize)> = HashMap::new();
+        for (&x, ps) in &partners {
+            'outer: for i in 0..ps.len() {
+                for k in (i + 1)..ps.len() {
+                    let pk = (ps[i].min(ps[k]), ps[i].max(ps[k]));
+                    if verdict.get(&pk) == Some(&judge::Verdict::Different) {
+                        ambiguous.insert(x, (ps[i], ps[k]));
+                        break 'outer;
+                    }
+                }
+            }
+        }
+        for j in judged.iter_mut() {
+            if j.3 == judge::Verdict::Same {
+                if let Some(&(p, q)) = ambiguous.get(&g(j.0)).or_else(|| ambiguous.get(&g(j.1))) {
+                    j.3 = judge::Verdict::Disagree;
+                    j.4 = format!("conflict: also SAME as two entities judged different ({} / {}). {}", rep_label(p), rep_label(q), j.4);
+                }
+            }
+        }
+        judge_conflicts = ambiguous.len();
     }
 
     // ---- 2. edge inflation
@@ -692,10 +725,11 @@ fn main() {
     if a.judge.is_some() {
         let same: Vec<_> = judged.iter().filter(|j| j.3 == judge::Verdict::Same).collect();
         let unsure = judged.iter().filter(|j| j.3 == judge::Verdict::Disagree).count();
-        p(&mut r, format!("**Judged by a language model: {} of {} candidate pairs are the same entity** (both orders answered SAME{}); {} got opposite answers in the two orders. Candidates come from the lists above, names sharing a rare word{}. {}A SAME whose reason describes a hierarchy (\"a type of\", \"a subset of\") is counted as uncertain. A model can be wrong: check before merging.\n",
+        p(&mut r, format!("**Judged by a language model: {} of {} candidate pairs are the same entity** (both orders answered SAME{}); {} got opposite answers in the two orders. Candidates come from the lists above, names sharing a rare word{}. {}A SAME whose reason describes a hierarchy (\"a type of\", \"a subset of\") is counted as uncertain; so are all SAME verdicts of a node judged the same as two entities that were judged different from each other ({} such generic nodes). A model can be wrong: check before merging, and never merge transitively.\n",
             same.len(), judged.len(), if descs.is_empty() { ", names and types only" } else { ", reading descriptions" }, unsure,
             if vecs.is_some() { " and each name's nearest embedding neighbours" } else { "" },
-            if judge_skipped > 0 { format!("{} pairs of abstract types (concepts, methods) were not judged; add `--judge-all` to include them. ", judge_skipped) } else { String::new() }));
+            if judge_skipped > 0 { format!("{} pairs of abstract types (concepts, methods) were not judged; add `--judge-all` to include them. ", judge_skipped) } else { String::new() },
+            judge_conflicts));
         if !same.is_empty() {
             p(&mut r, "| Label A | Label B | Proposed by | Model's reason |\n|---|---|---|---|".into());
             for j in same.iter().take(a.top.max(30)) {
