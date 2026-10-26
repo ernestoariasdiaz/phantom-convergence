@@ -713,6 +713,9 @@ fn main() {
             p(&mut r, format!("| Edges claimed by ≥ 2 documents | {} | {} beat chance (FDR q < {}) · {} within what chance predicts |", sup.len(), sig.len(), a.alpha, artifacts));
         }
     }
+    if skipped > 0 {
+        p(&mut r, format!("| Edge rows with an empty source or target | {} of {} | {}: dropped before every count below |", skipped, skipped + edges.len(), pct(skipped, skipped + edges.len())));
+    }
     if has_docs && edges.iter().any(|e| e.docs.is_empty()) {
         let un = edges.iter().filter(|e| e.docs.is_empty()).count();
         p(&mut r, format!("| Edges with no provenance | {} | not traceable to any document; see Structure |", un));
@@ -727,6 +730,18 @@ fn main() {
             if in_cycles == 0 && both == 0 { " · **acyclic by construction**" } else if reciprocal > 0 && in_cycles > 0 { " (two-way duplicate pairs count as cycles)" } else { "" }));
     }
 
+    // extraction errors in the type column: the type is the entity's own name ("SUCHIR BALAJI" typed
+    // "SUCHIR_BALAJI") or the name is a type word ("PERSON" typed "BRET_TAYLOR")
+    if typed {
+        let key = |t: &str| t.to_lowercase().replace(['_', '-'], " ");
+        let bad: Vec<usize> = (0..n_nodes)
+            .filter(|&i| !types[i].is_empty() && (key(&types[i]) == d.norm[i] || (d.norm[i].split(' ').count() == 1 && judge::NAMED_TYPES.contains(&labels[i].to_uppercase().as_str()) && !judge::NAMED_TYPES.contains(&types[i].as_str()))))
+            .collect();
+        if !bad.is_empty() {
+            p(&mut r, format!("**{} entities have a suspicious type**: the type is the entity's own name, or the name is itself a type word (an extraction slip, or a generic node): {}.\n", bad.len(),
+                bad.iter().take(8).map(|&i| format!("`{}` typed `{}`", md(&labels[i]), md(&types[i]))).collect::<Vec<_>>().join(", ")));
+        }
+    }
     p(&mut r, "## 1. Duplicate nodes\n".into());
     p(&mut r, format!("**{} of {} nodes ({}) are certain duplicates**: identical after lower-casing, removing accents, punctuation and leading articles{}. {} further {} for review: singular/plural forms of the same name, a leading title (King, Saint), the same name with an UNKNOWN type, or one typo apart (1 character edit up to 15 characters, 2 up to 30). Reordered words, different numbers, different honorifics (Mr / Mrs), opposites (movable / immovable){} are never paired.\n",
         n_nodes - d.n_groups, n_nodes, pct(n_nodes - d.n_groups, n_nodes), if typed { ", and of the same type" } else { "" }, d.likely.len(), if d.likely.len() == 1 { "pair is" } else { "pairs are" }, if typed { " and different types" } else { "" }));
@@ -794,6 +809,18 @@ fn main() {
     p(&mut r, format!("{} edge rows hold {} distinct edges; merging duplicate nodes leaves **{}**. {} edges became self-loops (a node linked to a copy of itself){}.\n",
         edges.len(), raw_keys.len(), merged.len(), self_loops_merge,
         if self_loops_raw > 0 { format!("; {self_loops_raw} were self-loops already") } else { String::new() }));
+    if self_loops_raw > 0 {
+        // "GPT4.1 is faster than GPT4.1": the text compared two things that extraction or entity
+        // resolution turned into one node
+        let mut seen_loops: HashSet<(usize, &str)> = HashSet::new();
+        let ex: Vec<String> = edges
+            .iter()
+            .filter(|e| e.u == e.v && seen_loops.insert((e.u, e.rel.as_str())))
+            .take(a.top)
+            .map(|e| format!("`{} — {} — {}`", md(&labels[e.u]), if e.rel.is_empty() { "?".to_string() } else { md(&e.rel) }, md(&labels[e.u])))
+            .collect();
+        p(&mut r, format!("**{} relationships link a node to itself.** A comparison or a parent–subsidiary relation stored as a self-loop usually means two different entities were merged into one node (by extraction or by entity resolution): {}\n", self_loops_raw, ex.join(", ")));
+    }
     if !a.undirected && reciprocal > 0 {
         p(&mut r, format!("{} node pairs are linked in both directions (A → B and B → A). In a directed graph that can be meaningful; in an undirected one (GraphRAG builds undirected graphs) each pair is one relationship stored twice. Rerun with `--undirected` to count them once.\n", reciprocal));
     }

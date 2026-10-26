@@ -201,9 +201,10 @@ pub fn partial_names(reps: &[usize], norm: &[String], raw: &[String], types: &[S
         }
         // a name, not a common noun: "Jobs", "CRUZ" yes; "ads", "business" no. A graph written all in
         // lower case carries no such signal: tried on five such graphs, all 27 proposals were a general
-        // and a specific concept ("communications" / "global communications"), so none are made there
-        // and the report says the check could not run.
-        if all_lower || !raw[reps[a]].trim().chars().next().map_or(false, |c| c.is_uppercase()) {
+        // and a specific concept ("communications" / "global communications"), so there only names typed
+        // as people are checked ("musk" / "elon musk").
+        let person = |t: &str| matches!(t.to_uppercase().as_str(), "PERSON" | "PEOPLE" | "CHARACTER");
+        if (all_lower && !(typed && person(&types[reps[a]]))) || (!all_lower && !raw[reps[a]].trim().chars().next().map_or(false, |c| c.is_uppercase())) {
             continue;
         }
         let mut hits = Vec::new();
@@ -456,7 +457,7 @@ pub fn dedup(labels: &[String], types: &[String], strictness: f64) -> DedupResul
                 // ("SOUTH AMERICAN" / "NORTH AMERICAN" is two edits in a five-letter word)
                 let (wa, wb): (Vec<&str>, Vec<&str>) = (a.split(' ').collect(), b.split(' ').collect());
                 if wa.len() == wb.len()
-                    && wa.iter().zip(&wb).any(|(x, y)| x != y && (levenshtein(x, y, 2) > if x.chars().count().max(y.chars().count()) <= 7 { 1 } else { 2 } || other_suffix(x, y)))
+                    && wa.iter().zip(&wb).any(|(x, y)| x != y && (levenshtein(x, y, 2) > if x.chars().count().max(y.chars().count()) <= 7 { 1 } else { 2 } || other_suffix(x, y) || (x.chars().count() <= 2 && y.chars().count() <= 2)))
                 {
                     continue;
                 }
@@ -593,7 +594,11 @@ mod tests {
         assert!(!r.likely.iter().any(|&(a, b, _, _)| (a.min(b), a.max(b)) == (2, 3)));
         assert!(r.likely.iter().any(|&(a, b, _, _)| (a.min(b), a.max(b)) == (4, 5)));
         let reps: Vec<usize> = (0..l.len()).collect();
-        assert!(partial_names(&reps, &r.norm, &l, &t, false).is_empty()); // all lower case: not assessed
+        assert!(partial_names(&reps, &r.norm, &l, &t, false).is_empty()); // all lower case, untyped: not assessed
+        let tp: Vec<String> = ["person", "person", "concept", "concept", "concept", "concept"].iter().map(|s| s.to_string()).collect();
+        assert_eq!(partial_names(&reps, &r.norm, &l, &tp, true), vec![(0, 1)]); // people only
+        let g: Vec<String> = ["uk government", "us government"].iter().map(|s| s.to_string()).collect();
+        assert!(dedup(&g, &vec![String::new(); 2], 1.0).likely.is_empty());
     }
 
     #[test]

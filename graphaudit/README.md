@@ -180,6 +180,30 @@ the partial-name check run on lower-case labels was tried and measured: all 27 p
 a general and a specific concept (`communications` / `global communications`), so it stays off. Every earlier graph
 gives the same counts as with v1.9.0. Converter: `tools/akg_to_csv.py`.
 
+## Blind test 3: itext2kg (ATOM), a graph with entity resolution
+
+[itext2kg](https://github.com/AuvaLab/itext2kg) resolves duplicate entities as it builds the graph, and publishes
+yearly snapshots of a news graph about OpenAI (`datasets/c-unseen/snapshots/`, Python pickles; read here with a
+restricted unpickler that only admits itext2kg's model classes and NumPy arrays). 2025: 210 entities, 469
+relationships from 135 atomic facts. graphaudit v1.10.0 was run unchanged first.
+
+| Finding | Evidence |
+|---|---|
+| Entity resolution merges too much | 16 self-loops: `gpt4.1 — is_faster_than — gpt4.1`, `gpt4.1 — is_cheaper_than — gpt4.1`, `openai — has_subsidiary — openai`. The facts compared GPT-4.1 with another model, or OpenAI's nonprofit with its subsidiary |
+| and still misses some | `musk` / `elon musk`, `u.s. dod` / `united states department of defense` |
+| Types are slips | `person` typed `bret_taylor`, `suchir balaji` typed `suchir_balaji`, `openai` typed `openai` |
+| Rows repeated | 469 rows hold 399 distinct relationships |
+
+So no spelling duplicates is not the same as a clean graph: resolution moves the error from "one thing, two nodes"
+to "two things, one node", and self-loops are where that shows.
+
+v1.10.0 counted the self-loops but did not show them, said nothing about the types, proposed `uk government` /
+`us government` as a typo, and skipped `musk` / `elon musk` because the graph is lower case. Fixed in v1.11: self-loops
+are listed with what they usually mean; entities whose type is their own name (or whose name is a type word) are
+listed; two different words of one or two letters are never a typo; and in a lower-case graph, partial names are
+checked between names typed as people only (2024: `altman` / `sam altman`; 2025: `musk` / `elon musk`; the five
+ai-knowledge-graph samples add one, `sultanes` / `sultanes nazaríes`). Every earlier graph gives the same counts.
+
 ## Control: a hand-built Neo4j graph
 
 Neo4j's *Movies* example ([neo4j-graph-examples/movies](https://github.com/neo4j-graph-examples/movies),
@@ -296,7 +320,7 @@ Columns are detected by name; override with `--src`, `--dst`, `--rel`, `--doc`, 
 Comma, semicolon and tab separators are detected. Multi-valued provenance cells such as
 `d1;d2`, `d1|d2` or `['t1', 't2']` (GraphRAG `text_unit_ids`) are split. Parquet output
 (e.g. GraphRAG) converts with `tools/graphrag_to_csv.py` (needs `pip install pandas pyarrow`); LightRAG's
-`graph_chunk_entity_relation.graphml` with `tools/lightrag_to_csv.py`, kg-gen JSON with `tools/kggen_to_csv.py`, ai-knowledge-graph JSON with `tools/akg_to_csv.py` (all standard library only).
+`graph_chunk_entity_relation.graphml` with `tools/lightrag_to_csv.py`, kg-gen JSON with `tools/kggen_to_csv.py`, ai-knowledge-graph JSON with `tools/akg_to_csv.py` (all standard library only); itext2kg snapshots with `tools/itext2kg_to_csv.py` (restricted unpickler, needs numpy).
 
 Output in `graphaudit_out/` (or `--out`): `report.md`, `duplicates.csv`, `likely_duplicates.csv`, `partial_names.csv`, `edge_support.csv`, and `semantic_duplicates.csv` with `--embed`.
 Options: `--undirected` (A → B and B → A are one edge), `--typos S` (edit budget for likely duplicates; 1 = default, 0 = off),
