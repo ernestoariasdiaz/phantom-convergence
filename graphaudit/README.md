@@ -147,7 +147,7 @@ needs more than cosine similarity (for example, reading the descriptions with an
 
 Embeddings measure topic, not identity. `--judge` instead asks a local instruction model, for each candidate
 pair, whether the two nodes are one and the same entity, showing it both names, types and descriptions.
-Each pair is asked twice, A–B and B–A, and counts only if both answers are SAME; related entities (spouses,
+Each pair is asked twice, A–B and B–A, and counts only if both answers are SAME; in a typed graph only named things (people, organisations, places, events) are judged unless `--judge-all` is given; related entities (spouses,
 predecessor and successor, a part and its whole, two battles in a series) are defined as DIFFERENT in the prompt.
 
 Candidates are every pair the other checks propose, plus names of compatible type that share a rare word
@@ -178,6 +178,12 @@ Several of the 8 wrong verdicts give a reason that contradicts them ("Property l
 law"). So: a 4B model judges named entities (people, organisations, events) well and over-merges general and
 specific concepts. Compared with embeddings on the same graph (1 duplicate found, ranked below gold / silver),
 both models separate "same" from "related" far better.
+
+**Since v1.7: named types only, by default.** In a typed graph `--judge` now judges only pairs where both sides are
+named things (PERSON, ORGANIZATION, GEO, EVENT…, or an `UNKNOWN` type next to one of them); `--judge-all` restores
+abstract types. Rerun with Qwen3-4B on the same graph: 23 pairs judged, 8 SAME, all right (6 of the 7 known person duplicates plus `RICHARD, DUKE OF YORK` / `YORK` and `/ DUKE OF YORK`), 0 wrong; `HENRY` / `HENRY VI` uncertain; houses, battles and different Richards and Henrys all judged different.
+A SAME whose own reason describes a hierarchy ("a type of", "a subset of") is now counted as uncertain; on the same
+answers that rule alone would have caught only 2 of the 8, so it is a backstop, not the fix.
 
 Gemma 4 E2B missed `HENRY TUDOR` / `HENRY VII` because the graph's own description of `HENRY VII` is a sentence about
 someone marrying him; Qwen read the same description correctly.

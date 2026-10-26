@@ -50,6 +50,7 @@ struct Args {
     desc: Option<String>,
     judge: Option<String>,
     judge_max: usize,
+    judge_all: bool,
 }
 
 const HELP: &str = "graphaudit — audit a knowledge graph's own numbers
@@ -78,6 +79,8 @@ USAGE: graphaudit <edges.csv> [options]
                      candidate pairs are the same entity, reading names, types and descriptions;
                      each pair is asked in both orders and counts only if both say SAME
   --judge-max N      most pairs to judge (default 300)
+  --judge-all        in a typed graph, also judge abstract types (CONCEPT, METHOD…); by default only
+                     named types are judged (PERSON, ORGANIZATION, GEO, EVENT…), where small models are reliable
 
 Writes DIR/report.md, duplicates.csv, likely_duplicates.csv, partial_names.csv, edge_support.csv
 (and semantic_duplicates.csv with --embed, judged_pairs.csv with --judge).";
@@ -108,6 +111,7 @@ fn parse_args() -> Args {
         desc: None,
         judge: None,
         judge_max: 300,
+        judge_all: false,
     };
     let mut it = env::args().skip(1);
     let mut pos = None;
@@ -131,6 +135,7 @@ fn parse_args() -> Args {
             "--embed-min" => a.embed_min = v("--embed-min").parse().unwrap_or_else(|_| die("bad --embed-min")),
             "--desc" => a.desc = Some(v("--desc")),
             "--judge" => a.judge = Some(v("--judge")),
+            "--judge-all" => a.judge_all = true,
             "--judge-max" => a.judge_max = v("--judge-max").parse().unwrap_or_else(|_| die("bad --judge-max")),
             "-h" | "--help" => {
                 println!("{HELP}");
@@ -370,6 +375,7 @@ fn main() {
 
     // an instruction model reads candidate pairs and says whether they are the same entity (optional)
     let mut judged: Vec<(usize, usize, &'static str, judge::Verdict, String)> = Vec::new();
+    let mut judge_skipped = 0usize;
     if let Some(url) = &a.judge {
         if descs.is_empty() {
             eprintln!("graphaudit: --judge without --desc: the model sees names and types only");
@@ -412,6 +418,17 @@ fn main() {
                 }
             }
         }
+        // in a typed graph, judge named things only (unless --judge-all): at least one side has a named
+        // type and the other a named or vague type
+        let mut skipped_abstract = 0usize;
+        if typed && !a.judge_all {
+            let named = |t: &str| judge::NAMED_TYPES.contains(&t.to_uppercase().as_str());
+            let before = cands.len();
+            cands.retain(|&(x, y, _)| {
+                (named(&types[x]) || named(&types[y])) && (named(&types[x]) || vague(&types[x])) && (named(&types[y]) || vague(&types[y]))
+            });
+            skipped_abstract = before - cands.len();
+        }
         if cands.len() > a.judge_max {
             eprintln!("graphaudit: {} candidate pairs, judging the first {} (raise with --judge-max)", cands.len(), a.judge_max);
             cands.truncate(a.judge_max);
@@ -425,6 +442,7 @@ fn main() {
             let (v, reason) = judge::judge(&ep, &node(x), &node(y)).unwrap_or_else(|e| die(&e));
             judged.push((x, y, why, v, reason));
         }
+        judge_skipped = skipped_abstract;
     }
 
     // ---- 2. edge inflation
@@ -674,9 +692,10 @@ fn main() {
     if a.judge.is_some() {
         let same: Vec<_> = judged.iter().filter(|j| j.3 == judge::Verdict::Same).collect();
         let unsure = judged.iter().filter(|j| j.3 == judge::Verdict::Disagree).count();
-        p(&mut r, format!("**Judged by a language model: {} of {} candidate pairs are the same entity** (both orders answered SAME{}); {} got opposite answers in the two orders. Candidates come from the lists above, names sharing a rare word{}. A model can be wrong: check before merging.\n",
+        p(&mut r, format!("**Judged by a language model: {} of {} candidate pairs are the same entity** (both orders answered SAME{}); {} got opposite answers in the two orders. Candidates come from the lists above, names sharing a rare word{}. {}A SAME whose reason describes a hierarchy (\"a type of\", \"a subset of\") is counted as uncertain. A model can be wrong: check before merging.\n",
             same.len(), judged.len(), if descs.is_empty() { ", names and types only" } else { ", reading descriptions" }, unsure,
-            if vecs.is_some() { " and each name's nearest embedding neighbours" } else { "" }));
+            if vecs.is_some() { " and each name's nearest embedding neighbours" } else { "" },
+            if judge_skipped > 0 { format!("{} pairs of abstract types (concepts, methods) were not judged; add `--judge-all` to include them. ", judge_skipped) } else { String::new() }));
         if !same.is_empty() {
             p(&mut r, "| Label A | Label B | Proposed by | Model's reason |\n|---|---|---|---|".into());
             for j in same.iter().take(a.top.max(30)) {

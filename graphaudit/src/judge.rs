@@ -85,16 +85,41 @@ fn ask(ep: &Endpoint, user: &str) -> Result<(bool, String), String> {
     Ok((same, reason))
 }
 
+/// Types that name one specific thing. Abstract types (CONCEPT, METHOD…) are left out by default:
+/// on a real graph a 4B model merged general concepts with narrower ones ("property law" / "Anglo-American law").
+pub const NAMED_TYPES: &[&str] = &["PERSON", "PEOPLE", "CHARACTER", "ORGANIZATION", "ORGANISATION", "ORG", "COMPANY", "GROUP",
+    "GEO", "LOCATION", "PLACE", "COUNTRY", "CITY", "FACILITY", "EVENT", "PRODUCT", "NATIONALITY", "WORK", "BOOK"];
+
+/// A reason that describes a hierarchy contradicts a SAME verdict ("B is a type of A").
+fn hierarchy(reason: &str) -> bool {
+    let r = reason.to_lowercase();
+    ["subset", "subtype", "sub-type", "type of", "kind of", "form of", "part of", "category", "broader", "narrower",
+     "specific type", "specific kind", "specific form", "specific case"]
+        .iter()
+        .any(|w| r.contains(w))
+}
+
 /// Judge one pair in both orders.
 pub fn judge(ep: &Endpoint, a: &Node, b: &Node) -> Result<(Verdict, String), String> {
     let (s1, r1) = ask(ep, &prompt(a, b))?;
     let (s2, r2) = ask(ep, &prompt(b, a))?;
     let v = match (s1, s2) {
+        (true, true) if hierarchy(&r1) || hierarchy(&r2) => Verdict::Disagree,
         (true, true) => Verdict::Same,
         (false, false) => Verdict::Different,
         _ => Verdict::Disagree,
     };
     Ok((v, if r1.is_empty() { r2 } else { r1 }))
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn hierarchy_reasons() {
+        assert!(super::hierarchy("Property law is a subset of Anglo-American law."));
+        assert!(super::hierarchy("Statutory possessory action is a type of possessory action."));
+        assert!(!super::hierarchy("Henry Tudor is the same person as Henry VII."));
+    }
 }
 
 pub fn endpoint(url: &str) -> Result<Endpoint, String> {
