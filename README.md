@@ -22,6 +22,7 @@ doi:10.5281/zenodo.23622420). The code is archived on Zenodo:
 | 1.10.0 | Edges with no provenance, ai-knowledge-graph support | [10.5281/zenodo.23654796](https://doi.org/10.5281/zenodo.23654796) |
 | 1.11.0 | Self-loops as merge evidence, itext2kg support | [10.5281/zenodo.23654876](https://doi.org/10.5281/zenodo.23654876) |
 | 1.12.0 | Short-word and title guards, entity comparison between graphs | [10.5281/zenodo.23654967](https://doi.org/10.5281/zenodo.23654967) |
+| 1.13.0 | Entities copied from the prompt example, entities with no type | [10.5281/zenodo.23655096](https://doi.org/10.5281/zenodo.23655096) |
 
 They audit ANIMUS, an autonomous
 knowledge-graph system. Each audit removed the effect the previous version had reported:
