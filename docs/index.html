@@ -1,0 +1,234 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>graphaudit · audit a knowledge graph's own numbers</title>
+<meta name="description" content="graphaudit checks the numbers LLM-built knowledge graphs report about themselves: duplicate nodes, edges that only beat chance by frequency, relationships with no source, entities copied from the extraction prompt. Open source, std-only Rust.">
+<meta property="og:title" content="graphaudit · audit a knowledge graph's own numbers">
+<meta property="og:description" content="Duplicate nodes, chance-level 'confirmed by N sources', unsourced edges, entities copied from the prompt. Tested blind on graphs from GraphRAG, LightRAG, kg-gen, ai-knowledge-graph and itext2kg.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://graphaudit.ernestoarias.dev/">
+<meta property="og:image" content="https://graphaudit.ernestoarias.dev/og-image.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="627">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:image" content="https://graphaudit.ernestoarias.dev/og-image.png">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 30 30'%3E%3Crect x='1' y='1' width='28' height='28' rx='5' fill='%23b4440e'/%3E%3Ccircle cx='10' cy='11' r='3' fill='white'/%3E%3Ccircle cx='20' cy='11' r='3' fill='white'/%3E%3Ccircle cx='15' cy='21' r='3' fill='white'/%3E%3Cpath d='M10 11 L20 11 L15 21 Z' stroke='white' stroke-width='1.6' fill='none'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@500;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+:root{
+  --bg:#eef0f3; --surface:#ffffff; --surface-2:#f5f6f8; --ink:#141a22; --muted:#566170; --line:#d4d9e0;
+  --accent:#b4440e; --accent-soft:#f6e3d8; --ok:#2f7d4f; --bad:#b3261e;
+  --term-bg:#0d1117; --term-fg:#d7dde5; --term-dim:#7f8a98; --term-acc:#f08a4b; --term-ok:#6fd39b;
+  --f-display:"Chakra Petch","IBM Plex Mono",ui-monospace,monospace;
+  --f-body:"IBM Plex Sans",system-ui,-apple-system,"Segoe UI",sans-serif;
+  --f-mono:"IBM Plex Mono",ui-monospace,"SFMono-Regular",Menlo,Consolas,monospace;
+  color-scheme:light;
+}
+@media (prefers-color-scheme: dark){ :root:not([data-theme="light"]){
+  --bg:#0f1318; --surface:#161c23; --surface-2:#1b222b; --ink:#e6eaf0; --muted:#97a3b1; --line:#2a333e;
+  --accent:#f0783a; --accent-soft:#3a2216; --ok:#5cc28a; --bad:#ff8a80; color-scheme:dark; } }
+:root[data-theme="dark"]{
+  --bg:#0f1318; --surface:#161c23; --surface-2:#1b222b; --ink:#e6eaf0; --muted:#97a3b1; --line:#2a333e;
+  --accent:#f0783a; --accent-soft:#3a2216; --ok:#5cc28a; --bad:#ff8a80; color-scheme:dark; }
+
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--f-body);font-size:16px;line-height:1.6}
+a{color:var(--accent)}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+h1,h2,h3{font-family:var(--f-display);line-height:1.15;text-wrap:balance;margin:0}
+code{font-family:var(--f-mono);font-size:.9em;background:var(--accent-soft);padding:1px 5px;border-radius:3px}
+.wrap{max-width:980px;margin:0 auto;padding:0 20px}
+
+/* top bar, like the ariasOS panel */
+.bar{background:var(--term-bg);color:var(--term-fg);font-family:var(--f-mono);font-size:13px;border-bottom:1px solid rgba(255,255,255,.06)}
+.bar .wrap{display:flex;align-items:center;gap:14px;height:44px}
+.bar .brand{display:flex;align-items:center;gap:8px;color:#e6eaf0;text-decoration:none;font-family:var(--f-display);font-weight:700;font-size:15px}
+.bar nav{display:flex;gap:14px;margin-left:auto;flex-wrap:wrap}
+.bar nav a{color:var(--term-dim);text-decoration:none}
+.bar nav a:hover{color:var(--term-fg)}
+.bar .crumb{color:var(--term-dim)}
+@media (max-width:640px){ .bar nav a{display:none} .bar nav a.keep{display:inline} .bar .crumb{display:none} }
+.theme{background:none;border:1px solid rgba(255,255,255,.18);color:var(--term-dim);border-radius:4px;padding:2px 8px;font:inherit;cursor:pointer}
+
+.hero{padding-top:56px;padding-bottom:36px}
+.eyebrow{font-family:var(--f-mono);font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+.hero h1{font-size:clamp(32px,5vw,52px);margin:10px 0 12px;letter-spacing:-.01em}
+.lede{font-size:18px;color:var(--muted);max-width:62ch;margin:0 0 22px}
+.btns{display:flex;gap:10px;flex-wrap:wrap}
+.btn{font-family:var(--f-mono);font-size:13.5px;font-weight:500;text-decoration:none;padding:10px 15px;border-radius:4px;border:1px solid var(--accent);color:var(--accent);display:inline-flex;align-items:center;gap:8px}
+.btn.primary{background:var(--accent);color:#fff}
+:root[data-theme="dark"] .btn.primary{color:#1a0c04}
+@media (prefers-color-scheme: dark){ :root:not([data-theme="light"]) .btn.primary{color:#1a0c04} }
+
+.term{background:var(--term-bg);color:var(--term-fg);font-family:var(--f-mono);font-size:13px;line-height:1.6;border-radius:6px;padding:14px 16px;overflow-x:auto;margin:26px 0 0;border:1px solid rgba(255,255,255,.06)}
+.term .p{color:var(--term-acc)} .term .d{color:var(--term-dim)} .term .ok{color:var(--term-ok)}
+.term pre{margin:0;white-space:pre}
+
+section{padding:34px 0;border-top:1px solid var(--line)}
+section h2{font-size:clamp(24px,3vw,30px);margin-bottom:6px}
+.sub{color:var(--muted);margin:0 0 20px;max-width:68ch}
+
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:6px;padding:16px 18px;min-width:0}
+.card h3{font-size:18px;margin-bottom:6px}
+.card p{margin:0;color:var(--muted);font-size:14.5px}
+.card .ex{font-family:var(--f-mono);font-size:12.5px;color:var(--ink);margin-top:10px;overflow-wrap:anywhere}
+
+.figs{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px;margin:0 0 22px}
+.fig{background:var(--surface);border:1px solid var(--line);border-radius:6px;padding:14px 16px}
+.fig b{display:block;font-family:var(--f-display);font-size:30px;line-height:1.1;font-variant-numeric:tabular-nums}
+.fig span{font-size:13.5px;color:var(--muted)}
+
+.tablewrap{overflow-x:auto;border:1px solid var(--line);border-radius:6px;background:var(--surface)}
+table{border-collapse:collapse;width:100%;font-size:14.5px;min-width:620px}
+th,td{text-align:left;padding:10px 14px;border-bottom:1px solid var(--line);vertical-align:top}
+tr:last-child td{border-bottom:0}
+th{font-family:var(--f-mono);font-size:11.5px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);font-weight:500;background:var(--surface-2)}
+td.sys{font-family:var(--f-mono);font-size:13px;white-space:nowrap}
+
+.two{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+@media (max-width:720px){ .two{grid-template-columns:1fr} }
+.list{margin:0;padding-left:20px;color:var(--muted);font-size:15px}
+.list li{margin:4px 0}
+.tag{font-family:var(--f-mono);font-size:11px;padding:1px 7px;border-radius:3px;border:1px solid currentColor;margin-left:6px;vertical-align:2px}
+.tag.ok{color:var(--ok)} .tag.exp{color:var(--accent)}
+
+.cite{font-family:var(--f-mono);font-size:13px;background:var(--surface);border:1px solid var(--line);border-radius:6px;padding:14px 16px;overflow-wrap:anywhere}
+footer{border-top:1px solid var(--line);padding:22px 0 40px;color:var(--muted);font-size:14px}
+footer .wrap{display:flex;gap:10px 24px;flex-wrap:wrap;justify-content:space-between}
+</style>
+</head>
+<body>
+
+<header class="bar">
+  <div class="wrap">
+    <a class="brand" href="https://ernestoarias.dev/">ariasOS</a>
+    <span class="crumb">/ graphaudit</span>
+    <nav aria-label="Sections">
+      <a href="#finds">finds</a>
+      <a href="#tested">tested</a>
+      <a href="#run">run</a>
+      <a class="keep" href="https://github.com/ernestoariasdiaz/phantom-convergence/tree/main/graphaudit">source</a>
+      <button class="theme" type="button" id="theme" aria-label="Toggle light and dark">◐</button>
+    </nav>
+  </div>
+</header>
+
+<main>
+<div class="wrap hero">
+  <div class="eyebrow">open source · std-only Rust · MIT</div>
+  <h1>Check a knowledge graph's own numbers before believing them.</h1>
+  <p class="lede">Graphs built by LLM pipelines report node counts, edge counts and "confirmed by N sources" scores. graphaudit asks of each number what it would be if nothing interesting were happening, and lists what does not hold up.</p>
+  <div class="btns">
+    <a class="btn primary" href="https://github.com/ernestoariasdiaz/phantom-convergence/tree/main/graphaudit">Source and README</a>
+    <a class="btn" href="https://github.com/ernestoariasdiaz/phantom-convergence/releases">Releases</a>
+    <a class="btn" href="https://doi.org/10.5281/zenodo.23622420">Preprint</a>
+  </div>
+  <div class="term" role="img" aria-label="Example run on a GraphRAG index of 7,945 entities">
+<pre><span class="p">$</span> graphaudit relationships.csv --nodes entities.csv --doc text_unit_ids --undirected
+<span class="d">nodes 7945 → 7718 unique · edges 7536 → 7453 · multi-source edges beating chance: 75/804</span>
+<span class="ok">report:</span> graphaudit_out/report.md</pre>
+  </div>
+</div>
+
+<section id="finds">
+  <div class="wrap">
+    <h2>What it finds</h2>
+    <p class="sub">Every check runs on a CSV export of the graph, with no model and no network. Each one has turned up something real in a graph built by an LLM.</p>
+    <div class="grid">
+      <div class="card"><h3>Duplicate nodes</h3><p>Certain duplicates (case, accents, punctuation, articles), likely ones (typos, plurals, titles, legal forms) and partial names, with guards for numbers, honorifics and opposites.</p><p class="ex">SUPERINTENDENCIA DE BANCOS DELAREPÚBLICADOMINICANA</p></div>
+      <div class="card"><h3>Sources vs. chance</h3><p>Is "found in N documents" more than two frequent entities produce anyway? Exact hypergeometric test, Benjamini–Hochberg across all edges.</p><p class="ex">SANTO DOMINGO — REPÚBLICA DOMINICANA: the letterhead</p></div>
+      <div class="card"><h3>Edges with no source</h3><p>Counts relationships with no provenance and how connected the graph is without them.</p><p class="ex">17–30% inferred; 2–16 pieces without them</p></div>
+      <div class="card"><h3>Self-loops</h3><p>A node linked to itself usually means two entities were merged into one.</p><p class="ex">gpt4.1 — is_faster_than — gpt4.1</p></div>
+      <div class="card"><h3>Copied from the prompt</h3><p>Entities named after the worked example in GraphRAG's default extraction prompt, which a model can copy into the graph.</p><p class="ex">AURELIA · FIRUZABAD · TIRUZIA · ALHAMIA PRISON</p></div>
+      <div class="card"><h3>Broken types and structure</h3><p>Missing or self-named types, edges to entities that do not exist, unused entities, disconnected pieces, two-way duplicates.</p><p class="ex">"person" typed "bret_taylor"</p></div>
+    </div>
+  </div>
+</section>
+
+<section id="tested">
+  <div class="wrap">
+    <h2>Tested on real graphs, several of them blind</h2>
+    <p class="sub">Run unchanged on graphs no rule had been tuned on; each run also exposed at least one error in the tool, fixed and recorded in the README.</p>
+    <div class="figs">
+      <div class="fig"><b>5</b><span>extraction systems</span></div>
+      <div class="fig"><b>15+</b><span>graphs from public repositories and the author's own</span></div>
+      <div class="fig"><b>0</b><span>findings on a hand-built Neo4j graph (control)</span></div>
+      <div class="fig"><b>262 / 262</b><span>concepts recovered on a synthetic graph with a known answer</span></div>
+    </div>
+    <div class="tablewrap">
+    <table>
+      <thead><tr><th>System</th><th>Graph</th><th>What the audit found</th></tr></thead>
+      <tbody>
+        <tr><td class="sys">GraphRAG</td><td>Banking regulation, 7,945 entities</td><td>The regulator is about 40 nodes (OCR); 4 entities copied from the prompt's example; the top "beyond chance" edge is the letterhead (161 chunks, 15 without it)</td></tr>
+        <tr><td class="sys">GraphRAG</td><td><i>A Christmas Carol</i>, three indexes</td><td>Each ghost split in two; only 78 of 642 distinct entities appear in all three indexes; a GLM-4-9B index contains Firuzabad and Aurelia</td></tr>
+        <tr><td class="sys">LightRAG</td><td>Wars of the Roses</td><td>Edward IV is three nodes; the same story is told twice and never connected</td></tr>
+        <tr><td class="sys">kg-gen</td><td>Apple Inc., 1,188 entities</td><td>The company is split; most of what the graph knows about Jobs sits on his surname alone</td></tr>
+        <tr><td class="sys">ai-knowledge-graph</td><td>Five samples</td><td>17–30% of edges are inferred, and they are what holds each graph together</td></tr>
+        <tr><td class="sys">itext2kg</td><td>OpenAI news, 2025</td><td>Entity resolution over-merges: 16 self-loops such as <code>gpt4.1 — is_cheaper_than — gpt4.1</code></td></tr>
+      </tbody>
+    </table>
+    </div>
+  </div>
+</section>
+
+<section id="run">
+  <div class="wrap">
+    <h2>Run it</h2>
+    <p class="sub">Build with Cargo, export your graph to CSV (converters included for GraphRAG, LightRAG, kg-gen, ai-knowledge-graph and itext2kg) and point graphaudit at it.</p>
+    <div class="term">
+<pre><span class="d"># build</span>
+<span class="p">$</span> git clone https://github.com/ernestoariasdiaz/phantom-convergence
+<span class="p">$</span> cd phantom-convergence/graphaudit &amp;&amp; cargo build --release
+
+<span class="d"># GraphRAG output (parquet) to CSV, then audit</span>
+<span class="p">$</span> python tools/graphrag_to_csv.py path/to/output graph_csv
+<span class="p">$</span> ./target/release/graphaudit graph_csv/relationships.csv --nodes graph_csv/entities.csv \
+      --id title --label title --doc text_unit_ids --undirected
+
+<span class="d"># letterheads and repeated text, without re-indexing</span>
+<span class="p">$</span> python tools/boilerplate.py path/to/output graph_csv/relationships.csv clean</pre>
+    </div>
+    <div class="two" style="margin-top:16px">
+      <div class="card"><h3>Reliable <span class="tag ok">no model</span></h3>
+        <ul class="list"><li>Duplicates, partial names, edge inflation</li><li>Source support against chance</li><li>Unsourced edges, self-loops, types, structure</li><li>Entities copied from the prompt example</li></ul></div>
+      <div class="card"><h3>Experimental <span class="tag exp">local model</span></h3>
+        <ul class="list"><li><code>--judge</code>: a local LLM decides whether two named entities are the same; useful for review, wrong on generic nodes</li><li><code>--embed</code>: embedding similarity; measured, and it rates related things above true duplicates</li></ul></div>
+    </div>
+    <p class="sub" style="margin-top:16px">graphaudit audits; it does not clean. Every list is for a person to review before changing the graph.</p>
+  </div>
+</section>
+
+<section id="cite">
+  <div class="wrap">
+    <h2>Cite</h2>
+    <p class="sub">The method comes from auditing ANIMUS, an autonomous knowledge-graph system, where 52% of nodes were duplicates and the flagship "32 sources" edge was at chance level.</p>
+    <div class="cite">Arias Díaz, E. A. (2026). <i>Phantom Convergence: Auditing Cross-Domain Claims in an Autonomously Built Knowledge Graph</i>. Zenodo. <a href="https://doi.org/10.5281/zenodo.23622420">https://doi.org/10.5281/zenodo.23622420</a><br>Software, latest archived version: <a href="https://doi.org/10.5281/zenodo.23671604">https://doi.org/10.5281/zenodo.23671604</a></div>
+  </div>
+</section>
+</main>
+
+<footer>
+  <div class="wrap">
+    <span>Ernesto Antonio Arias Díaz · independent researcher</span>
+    <span><a href="https://ernestoarias.dev/">ernestoarias.dev</a> · <a href="https://github.com/ernestoariasdiaz">GitHub</a> · <a href="https://orcid.org/0009-0002-3896-3323">ORCID</a></span>
+  </div>
+</footer>
+
+<script>
+(function(){
+  var root=document.documentElement, b=document.getElementById('theme');
+  try{ var t=localStorage.getItem('ga-theme'); if(t) root.setAttribute('data-theme',t); }catch(e){}
+  b.addEventListener('click',function(){
+    var dark=root.getAttribute('data-theme')==='dark' || (!root.getAttribute('data-theme') && matchMedia('(prefers-color-scheme: dark)').matches);
+    var next=dark?'light':'dark'; root.setAttribute('data-theme',next);
+    try{ localStorage.setItem('ga-theme',next); }catch(e){}
+  });
+})();
+</script>
+</body>
+</html>
