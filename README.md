@@ -61,9 +61,15 @@ Usage and options: see each folder's README.
 2. **Run a positive control before reading results.** Here, each idea picks its own source quote out of 20 (97%; chance 5%).
 3. **Run the whole procedure on decoys that keep the suspected confound.** Word decoys exposed vocabulary; only form decoys exposed negation.
 
-## Data
+## Data and reproduction
+
+[`REPRODUCE.md`](REPRODUCE.md) maps every result in the preprint to the command that produces it. [`data/`](data) holds the published outputs: the 10,897 extracted ideas and the real and decoy links, without book text.
 
 Book texts are not included (copyright). `convaudit/tools/seleccionar_libros.ps1` and `pdf2txt.py` rebuild the corpus from your own copies.
+
+## Licences
+
+Code: MIT. Data in `data/` and documentation: CC BY 4.0.
 
 ## Cite
 

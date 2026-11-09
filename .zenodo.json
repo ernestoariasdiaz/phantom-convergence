@@ -1,0 +1,21 @@
+{
+  "upload_type": "software",
+  "description": "Tools for auditing the numbers that autonomously built knowledge graphs report about themselves: convaudit (co-occurrence convergence against chance), animus5 (quote-grounded idea extraction and decoy controls) and graphaudit (duplicate nodes, edge inflation, source support and provenance checks for GraphRAG, LightRAG, kg-gen, Neo4j and CSV graphs). Standard-library-only Rust.",
+  "creators": [
+    {
+      "name": "Arias Díaz, Ernesto Antonio",
+      "affiliation": "Independent researcher",
+      "orcid": "0009-0002-3896-3323"
+    }
+  ],
+  "license": "MIT",
+  "keywords": ["knowledge graph", "GraphRAG", "entity resolution", "LLM evaluation", "audit", "Rust"],
+  "related_identifiers": [
+    {
+      "identifier": "10.5281/zenodo.23622420",
+      "relation": "isSupplementTo",
+      "resource_type": "publication-preprint",
+      "scheme": "doi"
+    }
+  ]
+}
